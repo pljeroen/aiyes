@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.env
+.env.*
+*.pem
+*.key
+
+# Personal workflow files
+.tddv6/
+CLAUDE.md
+SESSION_HANDOFF*.md
+.hypothesis/
+.claude/
+.codex/
+.serena/
+.kernel-aios/
+.fastembed_cache/
+AGENTS.md
+
+# Internal analysis outputs (stay local, not published)
+docs/gui-inspection-strategies.md
+docs/gui-agent-product-spec.md
+docs/specs/
+docs/archive/
+docs/2026-04-12-release-assessment-report.md

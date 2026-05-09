@@ -1,0 +1,81 @@
+[build-system]
+requires = ["setuptools>=77.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aiyes"
+version = "0.2.0"
+description = "AI agent GUI inspection and control tool for Linux and Android"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "AGPL-3.0-or-later"
+authors = [
+    {name = "Jeroen"},
+]
+keywords = ["gui", "automation", "accessibility", "ai-agent", "at-spi", "android", "adb"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: Quality Assurance",
+    "Typing :: Typed",
+]
+dependencies = ["click>=8.0"]
+
+[project.urls]
+Repository = "https://github.com/pljeroen/aiyes"
+Issues = "https://github.com/pljeroen/aiyes/issues"
+
+[project.scripts]
+aieyes = "aiyes.cli.main:cli"
+aieyes-mcp = "aiyes.adapters.mcp_server:main"
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0"]
+test = ["pytest>=7.0", "pytest-cov", "hypothesis", "pytest-asyncio", "mcp>=1.0"]
+dev = ["pytest>=7.0", "pytest-cov", "hypothesis", "pytest-asyncio", "mcp>=1.0", "ruff", "mypy", "build", "twine"]
+
+[project.entry-points.pytest11]
+aiyes = "aiyes.pytest_plugin"
+
+[tool.setuptools.package-data]
+aiyes = ["py.typed"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "requires_adb: test requires adb binary on PATH",
+]
+
+[tool.mypy]
+mypy_path = "src"
+packages = ["aiyes"]
+ignore_missing_imports = true
+
+# AT-SPI2/PyGObject adapters — no type stubs exist for GIR bindings
+[[tool.mypy.overrides]]
+module = [
+    "aiyes.adapters.atspi_subprocess_worker",
+    "aiyes.adapters.atspi_action_adapter",
+    "aiyes.adapters.atspi_bus_adapter",
+    "aiyes.adapters.atspi_tree_adapter",
+    "aiyes.adapters.atspi_window_adapter",
+]
+ignore_errors = true
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E402", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["F841", "F401"]

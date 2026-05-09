@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "id": "android-settings",
+  "title": "Android Settings smoke",
+  "target": "android",
+  "prerequisites": [
+    {
+      "kind": "executable",
+      "name": "adb"
+    },
+    {
+      "kind": "android_device",
+      "serial": "auto"
+    }
+  ],
+  "steps": [
+    {
+      "id": "start",
+      "kind": "start_session",
+      "backend": "android",
+      "name": "android-settings-smoke",
+      "device_serial": "auto",
+      "command": ["adb", "shell", "am", "start", "-a", "android.settings.SETTINGS"],
+      "wait_seconds": 2,
+      "on_failure": "cleanup_then_fail"
+    },
+    {
+      "id": "inspect_initial",
+      "kind": "inspect",
+      "tree_depth": 4
+    },
+    {
+      "id": "find_safe_top_level",
+      "kind": "find",
+      "role": "TextView",
+      "name_pattern": "Network"
+    },
+    {
+      "id": "open_safe_top_level",
+      "kind": "action",
+      "source": "find_safe_top_level",
+      "action": "click"
+    },
+    {
+      "id": "inspect_after_open",
+      "kind": "inspect",
+      "tree_depth": 4
+    },
+    {
+      "id": "assert_tree_changed",
+      "kind": "assert",
+      "assertion": {
+        "kind": "text_or_name_matches",
+        "source": "inspect_after_open",
+        "pattern": "internet"
+      }
+    },
+    {
+      "id": "screenshot",
+      "kind": "screenshot"
+    },
+    {
+      "id": "back",
+      "kind": "navigate",
+      "action": "back"
+    }
+  ],
+  "cleanup": [
+    {
+      "id": "stop",
+      "kind": "stop_session"
+    }
+  ],
+  "evidence_policy": {
+    "bundle": true,
+    "redact_environment": true
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "id": "linux-gedit-text",
+  "title": "Linux gedit text smoke",
+  "target": "linux",
+  "prerequisites": [
+    {
+      "kind": "executable",
+      "name": "gedit"
+    },
+    {
+      "kind": "aieyes_backend",
+      "backend": "linux"
+    }
+  ],
+  "steps": [
+    {
+      "id": "start",
+      "kind": "start_session",
+      "backend": "linux",
+      "name": "linux-gedit-text-smoke",
+      "command": ["gedit", "/tmp/aiyes-gedit-smoke.txt"],
+      "wait_seconds": 3,
+      "on_failure": "cleanup_then_fail"
+    },
+    {
+      "id": "inspect_initial",
+      "kind": "inspect",
+      "tree_depth": 4
+    },
+    {
+      "id": "type_hello",
+      "kind": "type_text",
+      "text": "hello from aiyes"
+    },
+    {
+      "id": "inspect_after_type",
+      "kind": "inspect",
+      "tree_depth": 4
+    },
+    {
+      "id": "assert_text",
+      "kind": "assert",
+      "assertion": {
+        "kind": "text_or_name_matches",
+        "pattern": "*aiyes-gedit-smoke.txt"
+      }
+    },
+    {
+      "id": "screenshot",
+      "kind": "screenshot"
+    }
+  ],
+  "cleanup": [
+    {
+      "id": "stop",
+      "kind": "stop_session"
+    }
+  ],
+  "evidence_policy": {
+    "bundle": true,
+    "redact_environment": true
+  }
+}
