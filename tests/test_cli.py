@@ -616,7 +616,7 @@ class TestPyprojectToml:
         assert 'readme = "README.md"' in content
         assert 'license = "AGPL-3.0-or-later"' in content
         assert "License :: OSI Approved" not in content
-        assert 'requires = ["setuptools>=77.0", "wheel"]' in content
+        assert 'requires = ["setuptools>=78.1.1", "wheel"]' in content
 
     def test_dev_tooling_contains_package_release_checks(self) -> None:
         content = Path("pyproject.toml").read_text()

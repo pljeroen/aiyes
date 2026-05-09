@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77.0", "wheel"]
+requires = ["setuptools>=78.1.1", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -27,7 +27,7 @@ classifiers = [
     "Topic :: Software Development :: Quality Assurance",
     "Typing :: Typed",
 ]
-dependencies = ["click>=8.0"]
+dependencies = ["click>=8.3.3"]
 
 [project.urls]
 Repository = "https://github.com/pljeroen/aiyes"
@@ -38,9 +38,9 @@ aieyes = "aiyes.cli.main:cli"
 aieyes-mcp = "aiyes.adapters.mcp_server:main"
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.0"]
-test = ["pytest>=7.0", "pytest-cov", "hypothesis", "pytest-asyncio", "mcp>=1.0"]
-dev = ["pytest>=7.0", "pytest-cov", "hypothesis", "pytest-asyncio", "mcp>=1.0", "ruff", "mypy", "build", "twine"]
+mcp = ["mcp>=1.23.0"]
+test = ["pytest>=7.0", "pytest-cov", "hypothesis", "pytest-asyncio", "mcp>=1.23.0"]
+dev = ["pytest>=7.0", "pytest-cov", "hypothesis", "pytest-asyncio", "mcp>=1.23.0", "ruff", "mypy", "build", "twine"]
 
 [project.entry-points.pytest11]
 aiyes = "aiyes.pytest_plugin"
