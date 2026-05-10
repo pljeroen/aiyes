@@ -58,7 +58,9 @@ class TestReleaseGate:
             "python -m pytest -q",
             "python -m build",
             "python -m twine check dist/*",
+            "pip uninstall -y aiyes",
             'bin/pip-audit" --strict',
+            'pip install "${WHEELS[0]}[mcp]"',
             'bin/cyclonedx-py" environment',
         ]
 
@@ -70,6 +72,8 @@ class TestReleaseGate:
 
         assert "missing required release tool" in content
         assert 'python -m pip install -e ".[dev]"' in content
+        assert "WHEELS=(dist/*.whl)" in content
+        assert '"${WHEELS[0]}[mcp]"' in content
         assert "pip-audit" in content
         assert "cyclonedx-py" in content
 

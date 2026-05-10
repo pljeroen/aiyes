@@ -40,7 +40,10 @@ class TestLocalReleaseGate:
 
         assert 'AUDIT_VENV="$(mktemp -d)"' in content
         assert 'python -m venv "$AUDIT_VENV"' in content
-        assert "pip install pip-audit cyclonedx-bom" in content
+        assert "WHEELS=(dist/*.whl)" in content
+        assert '"${WHEELS[0]}[mcp]"' in content
+        assert "pip uninstall -y aiyes" in content
+        assert "'dist/'*.whl'[mcp]'" not in content
 
     def test_dev_extra_contains_local_release_security_tools(self) -> None:
         content = _read(PYPROJECT)

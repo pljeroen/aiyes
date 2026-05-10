@@ -25,8 +25,11 @@ trap 'rm -rf "$AUDIT_VENV"' EXIT
 
 python -m venv "$AUDIT_VENV"
 "$AUDIT_VENV/bin/python" -m pip install --upgrade pip
-"$AUDIT_VENV/bin/python" -m pip install pip-audit cyclonedx-bom 'dist/'*.whl'[mcp]'
+WHEELS=(dist/*.whl)
+"$AUDIT_VENV/bin/python" -m pip install pip-audit cyclonedx-bom "${WHEELS[0]}[mcp]"
+"$AUDIT_VENV/bin/python" -m pip uninstall -y aiyes
 "$AUDIT_VENV/bin/pip-audit" --strict
+"$AUDIT_VENV/bin/python" -m pip install "${WHEELS[0]}[mcp]"
 "$AUDIT_VENV/bin/cyclonedx-py" environment \
   --output-format JSON \
   --output-file dist/aiyes-sbom.cdx.json
