@@ -40,7 +40,7 @@ aieyes-mcp = "aiyes.adapters.mcp_server:main"
 [project.optional-dependencies]
 mcp = ["mcp>=1.23.0"]
 test = ["pytest>=7.0", "pytest-cov", "hypothesis", "pytest-asyncio", "mcp>=1.23.0"]
-dev = ["pytest>=7.0", "pytest-cov", "hypothesis", "pytest-asyncio", "mcp>=1.23.0", "ruff", "mypy", "build", "twine"]
+dev = ["pytest>=7.0", "pytest-cov", "hypothesis", "pytest-asyncio", "mcp>=1.23.0", "ruff", "mypy", "build", "twine", "pip-audit>=2.10.0", "cyclonedx-bom>=7.3.0"]
 
 [project.entry-points.pytest11]
 aiyes = "aiyes.pytest_plugin"

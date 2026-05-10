@@ -10,48 +10,43 @@ CI = PROJECT_ROOT / ".github" / "workflows" / "ci.yml"
 RELEASE = PROJECT_ROOT / ".github" / "workflows" / "release-artifacts.yml"
 SECURITY = PROJECT_ROOT / "SECURITY.md"
 SMOKE = PROJECT_ROOT / "docs" / "release-smoke.md"
+README = PROJECT_ROOT / "README.md"
+PYPROJECT = PROJECT_ROOT / "pyproject.toml"
+RELEASE_CHECK = PROJECT_ROOT / "scripts" / "release-check.sh"
 
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-class TestCiReleaseGate:
-    def test_ci_has_least_privilege_permissions(self) -> None:
-        content = _read(CI)
+class TestLocalReleaseGate:
+    def test_public_github_workflows_are_not_tracked(self) -> None:
+        assert not CI.exists()
+        assert not RELEASE.exists()
 
-        assert "permissions:" in content
-        assert "contents: read" in content
-
-    def test_ci_runs_public_quality_gates(self) -> None:
-        content = _read(CI)
+    def test_release_check_runs_quality_build_audit_and_sbom(self) -> None:
+        content = _read(RELEASE_CHECK)
 
         for command in (
-            "ruff check src/ tests/",
-            "mypy src/aiyes/",
+            "python -m ruff check src tests",
+            "python -m mypy src/aiyes",
             "python -m pytest -q",
             "python -m build",
             "python -m twine check dist/*",
+            'bin/pip-audit" --strict',
+            'bin/cyclonedx-py" environment',
         ):
             assert command in content
 
-    def test_ci_does_not_ignore_test_files(self) -> None:
-        content = _read(CI)
+        assert 'AUDIT_VENV="$(mktemp -d)"' in content
+        assert 'python -m venv "$AUDIT_VENV"' in content
+        assert "pip install pip-audit cyclonedx-bom" in content
 
-        assert "--ignore=tests/" not in content
+    def test_dev_extra_contains_local_release_security_tools(self) -> None:
+        content = _read(PYPROJECT)
 
-
-class TestReleaseArtifactWorkflow:
-    def test_release_artifact_workflow_builds_dist_without_publishing(self) -> None:
-        content = _read(RELEASE)
-
-        assert "on:" in content
-        assert "workflow_dispatch:" in content
-        assert "tags:" in content
-        assert "python -m build" in content
-        assert "python -m twine check dist/*" in content
-        assert "actions/upload-artifact" in content
-        assert "twine upload" not in content
+        assert "pip-audit>=2.10.0" in content
+        assert "cyclonedx-bom>=7.3.0" in content
 
 
 class TestSecurityAndSmokeDocs:
@@ -62,6 +57,15 @@ class TestSecurityAndSmokeDocs:
         assert "local stdio" in content.lower()
         assert "Do not expose" in content
         assert "not a sandbox" in content.lower()
+        assert "Release checks are maintainer-local" in content
+
+    def test_readme_documents_maintainer_local_release_gate(self) -> None:
+        content = _read(README)
+
+        assert "Maintainer release gate" in content
+        assert "Actions should remain disabled" in content
+        assert "scripts/release-check.sh" in content
+        assert "CycloneDX SBOM" in content
 
     def test_release_smoke_doc_records_linux_and_android_checks(self) -> None:
         content = _read(SMOKE)

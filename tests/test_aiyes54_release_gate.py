@@ -9,6 +9,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
 RELEASE_WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "release-artifacts.yml"
+RELEASE_CHECK = PROJECT_ROOT / "scripts" / "release-check.sh"
 PYPROJECT = PROJECT_ROOT / "pyproject.toml"
 RUNTIME_VERSION = PROJECT_ROOT / "src" / "aiyes" / "__init__.py"
 
@@ -19,7 +20,7 @@ def _read(path: Path) -> str:
 
 def _position(content: str, needle: str) -> int:
     position = content.find(needle)
-    assert position >= 0, f"missing required release workflow content: {needle}"
+    assert position >= 0, f"missing required release gate content: {needle}"
     return position
 
 
@@ -41,51 +42,43 @@ def _project_version() -> str:
     return match.group(1)
 
 
-class TestReleaseWorkflowGates:
-    def test_release_artifact_workflow_runs_all_gates_before_build_and_upload(
+class TestReleaseGate:
+    def test_release_workflow_is_removed_for_public_repo_posture(self) -> None:
+        assert not RELEASE_WORKFLOW.exists()
+
+    def test_local_release_gate_runs_all_gates_before_sbom(
         self,
     ) -> None:
-        content = _read(RELEASE_WORKFLOW)
+        content = _read(RELEASE_CHECK)
 
         required_in_order = [
-            'test "$(git rev-parse HEAD)" = "$RELEASE_SHA"',
-            "Project version matches runtime version",
-            "Tag version matches project version",
-            "ruff check src/ tests/",
-            "mypy src/aiyes/",
+            "rm -rf dist build src/aiyes.egg-info",
+            "python -m ruff check src tests",
+            "python -m mypy src/aiyes",
             "python -m pytest -q",
             "python -m build",
             "python -m twine check dist/*",
-            "python -m venv /tmp/aiyes-wheel-smoke",
-            "aieyes --help",
-            "aieyes --version",
-            "python -m venv /tmp/aiyes-mcp-missing-extra",
-            "aieyes-mcp",
-            "requires the 'mcp' package",
-            "python -m venv /tmp/aiyes-mcp-installed-extra",
-            "pip install 'dist/'*.whl'[mcp]'",
-            "import aiyes.adapters.mcp_server as mcp_server",
-            "assert mcp_server._MCP_AVAILABLE is True",
-            "actions/upload-artifact@v4",
+            'bin/pip-audit" --strict',
+            'bin/cyclonedx-py" environment',
         ]
 
         positions = [_position(content, needle) for needle in required_in_order]
         assert positions == sorted(positions)
 
-    def test_release_build_job_installs_release_scope_dependencies(self) -> None:
-        content = _read(RELEASE_WORKFLOW)
+    def test_release_gate_requires_dev_security_tools(self) -> None:
+        content = _read(RELEASE_CHECK)
 
+        assert "missing required release tool" in content
         assert 'python -m pip install -e ".[dev]"' in content
-        assert "python -m pip install build twine" not in content
+        assert "pip-audit" in content
+        assert "cyclonedx-py" in content
 
-    def test_tag_and_manual_release_paths_share_same_job_without_bypass(self) -> None:
-        content = _read(RELEASE_WORKFLOW)
+    def test_local_release_gate_has_no_publish_or_remote_ci_behavior(self) -> None:
+        content = _read(RELEASE_CHECK)
 
-        assert "workflow_dispatch:" in content
-        assert "tags:" in content
-        assert content.count("actions/upload-artifact@v4") == 1
         assert "twine upload" not in content
-        assert "if: github.ref_type == 'tag'" not in content
+        assert "actions/" not in content
+        assert "GITHUB_TOKEN" not in content
 
 
 class TestVersionConsistency:

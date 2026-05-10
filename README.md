@@ -146,6 +146,22 @@ aieyes scenario run --public-fixture examples/scenarios/android-settings.json
 See [Release Scenarios](docs/release-scenarios.md) for the secondary release
 gate pattern, evidence bundle usage, and MCP parity follow-up.
 
+## Maintainer release gate
+
+This repository does not rely on public GitHub Actions for release decisions.
+Actions should remain disabled for the public repository because external code
+and GUI-control workflows are untrusted input.
+
+Maintainer-local release checks are run from a trusted local checkout:
+
+```bash
+python -m pip install -e ".[dev]"
+scripts/release-check.sh
+```
+
+The local gate runs lint, typecheck, full tests, package build/check,
+dependency audit, and writes a CycloneDX SBOM to `dist/aiyes-sbom.cdx.json`.
+
 ## MCP server
 
 An optional MCP (Model Context Protocol) server adapter is available:
