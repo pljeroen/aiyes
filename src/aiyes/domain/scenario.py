@@ -38,8 +38,18 @@ _VALID_STEP_KINDS = frozenset(
     )
 )
 _VALID_DIRECTIONS = frozenset(("up", "down", "left", "right"))
+_VALID_REACTIVE_CONDITIONS = frozenset(
+    (
+        "screen-change",
+        "node-appears",
+        "node-disappears",
+        "focus-change",
+        "app-change",
+    )
+)
 _SLEEP_CEILING_SECONDS = 5.0
 _SLEEP_REASON_MIN_LENGTH = 20
+_SWIPE_DURATION_CEILING_MS = 5000
 _VALID_FAILURE_POLICIES = frozenset(("fail", "skip", "cleanup_then_fail"))
 _PUBLIC_DENIED_FRAGMENTS = frozenset(("/home/", "private", "/dev/"))
 
@@ -263,8 +273,8 @@ def _validate_steps(
                     "invalid failure policy",
                 )
             )
-        if kind == "sleep":
-            issues.extend(_validate_sleep_step(item, f"{path}[{index}]"))
+        if isinstance(kind, str) and kind in _VALID_STEP_KINDS:
+            issues.extend(_validate_kind_specific(kind, item, f"{path}[{index}]"))
         if (
             isinstance(step_id, str)
             and _VALID_ID.match(step_id)
@@ -283,6 +293,214 @@ def _validate_steps(
                 )
             )
     return tuple(steps)
+
+
+def _validate_kind_specific(
+    kind: str, item: Mapping[str, Any], path: str
+) -> Tuple[ScenarioValidationIssue, ...]:
+    """Per-kind load-time parameter checks.
+
+    Implementation note: covers the kinds added in AIYES-44..47. Earlier
+    kinds (start_session, inspect, find, action, type_text, screenshot,
+    navigate, stop_session, assert) keep their executor-level validation
+    pending the wider retrofit (follow-up contract).
+    """
+    if kind == "sleep":
+        return _validate_sleep_step(item, path)
+    if kind == "wait":
+        return _validate_wait_step(item, path)
+    if kind == "wait_reactive":
+        return _validate_wait_reactive_step(item, path)
+    if kind == "key":
+        return _validate_key_step(item, path)
+    if kind == "mouse_drag":
+        return _validate_drag_coords(item, path)
+    if kind == "mouse_scroll":
+        return _validate_mouse_scroll_step(item, path)
+    if kind == "gesture_pinch":
+        return _validate_gesture_pinch_step(item, path)
+    if kind == "gesture_two_finger_scroll":
+        return _validate_gesture_two_finger_scroll_step(item, path)
+    if kind == "swipe":
+        return _validate_swipe_step(item, path)
+    return ()
+
+
+def _validate_wait_step(
+    item: Mapping[str, Any], path: str
+) -> Tuple[ScenarioValidationIssue, ...]:
+    issues: list[ScenarioValidationIssue] = []
+    role = item.get("role")
+    if not isinstance(role, str) or not role:
+        issues.append(
+            _issue(
+                f"{path}.role",
+                "wait_role_required",
+                "wait.role must be a non-empty string",
+            )
+        )
+    timeout = item.get("timeout")
+    if timeout is not None:
+        if (
+            not isinstance(timeout, (int, float))
+            or isinstance(timeout, bool)
+            or timeout < 0
+        ):
+            issues.append(
+                _issue(
+                    f"{path}.timeout",
+                    "wait_timeout_invalid",
+                    "wait.timeout must be a non-negative number",
+                )
+            )
+    return tuple(issues)
+
+
+def _validate_wait_reactive_step(
+    item: Mapping[str, Any], path: str
+) -> Tuple[ScenarioValidationIssue, ...]:
+    issues: list[ScenarioValidationIssue] = []
+    condition = item.get("condition")
+    if not isinstance(condition, str) or not condition:
+        issues.append(
+            _issue(
+                f"{path}.condition",
+                "wait_reactive_condition_required",
+                "wait_reactive.condition is required",
+            )
+        )
+    elif condition not in _VALID_REACTIVE_CONDITIONS:
+        issues.append(
+            _issue(
+                f"{path}.condition",
+                "wait_reactive_condition_invalid",
+                f"wait_reactive.condition must be one of {sorted(_VALID_REACTIVE_CONDITIONS)}",
+            )
+        )
+    return tuple(issues)
+
+
+def _validate_key_step(
+    item: Mapping[str, Any], path: str
+) -> Tuple[ScenarioValidationIssue, ...]:
+    keys = item.get("keys")
+    if not isinstance(keys, (list, tuple)) or not keys:
+        return (
+            _issue(
+                f"{path}.keys",
+                "key_keys_required",
+                "key.keys must be a non-empty list of keycode strings",
+            ),
+        )
+    if not all(isinstance(k, str) and k for k in keys):
+        return (
+            _issue(
+                f"{path}.keys",
+                "key_keys_required",
+                "key.keys entries must be non-empty strings",
+            ),
+        )
+    return ()
+
+
+def _validate_drag_coords(
+    item: Mapping[str, Any], path: str
+) -> Tuple[ScenarioValidationIssue, ...]:
+    has_literal = all(k in item for k in ("x1", "y1", "x2", "y2"))
+    has_source = "source" in item
+    if has_literal and has_source:
+        return (
+            _issue(
+                f"{path}",
+                "coord_mode_ambiguous",
+                "supply literal x1/y1/x2/y2 OR source/dx/dy, not both",
+            ),
+        )
+    if has_source:
+        if "dx" not in item or "dy" not in item:
+            return (
+                _issue(
+                    f"{path}",
+                    "coord_mode_missing",
+                    "source-anchored coords require dx and dy",
+                ),
+            )
+        return ()
+    if has_literal:
+        return ()
+    return (
+        _issue(
+            f"{path}",
+            "coord_mode_missing",
+            "supply literal x1/y1/x2/y2 or source/dx/dy",
+        ),
+    )
+
+
+def _validate_mouse_scroll_step(
+    item: Mapping[str, Any], path: str
+) -> Tuple[ScenarioValidationIssue, ...]:
+    direction = item.get("direction")
+    if not isinstance(direction, str) or direction not in _VALID_DIRECTIONS:
+        return (
+            _issue(
+                f"{path}.direction",
+                "direction_invalid",
+                f"direction must be one of {sorted(_VALID_DIRECTIONS)}",
+            ),
+        )
+    return ()
+
+
+def _validate_gesture_pinch_step(
+    item: Mapping[str, Any], path: str
+) -> Tuple[ScenarioValidationIssue, ...]:
+    if "scale_factor" not in item:
+        return (
+            _issue(
+                f"{path}.scale_factor",
+                "gesture_pinch_scale_factor_required",
+                "gesture_pinch.scale_factor is required",
+            ),
+        )
+    return ()
+
+
+def _validate_gesture_two_finger_scroll_step(
+    item: Mapping[str, Any], path: str
+) -> Tuple[ScenarioValidationIssue, ...]:
+    direction = item.get("direction")
+    if not isinstance(direction, str) or direction not in _VALID_DIRECTIONS:
+        return (
+            _issue(
+                f"{path}.direction",
+                "direction_invalid",
+                f"direction must be one of {sorted(_VALID_DIRECTIONS)}",
+            ),
+        )
+    return ()
+
+
+def _validate_swipe_step(
+    item: Mapping[str, Any], path: str
+) -> Tuple[ScenarioValidationIssue, ...]:
+    issues = list(_validate_drag_coords(item, path))
+    duration_ms = item.get("duration_ms")
+    if duration_ms is not None:
+        if (
+            not isinstance(duration_ms, (int, float))
+            or isinstance(duration_ms, bool)
+            or duration_ms < 0
+            or duration_ms > _SWIPE_DURATION_CEILING_MS
+        ):
+            issues.append(
+                _issue(
+                    f"{path}.duration_ms",
+                    "swipe_duration_exceeded",
+                    f"swipe.duration_ms must be in [0, {_SWIPE_DURATION_CEILING_MS}]",
+                )
+            )
+    return tuple(issues)
 
 
 def _validate_sleep_step(
