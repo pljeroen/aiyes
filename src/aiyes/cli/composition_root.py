@@ -71,7 +71,9 @@ from aiyes.adapters.system_dependency_check import SystemDependencyCheck
 from aiyes.adapters.android_action_adapter import AndroidActionAdapter
 from aiyes.adapters.adb_app_lifecycle_adapter import AdbAppLifecycleAdapter
 from aiyes.adapters.adb_activity_adapter import AdbActivityQueryAdapter
-from aiyes.adapters.android_capability_probe_adapter import AndroidCapabilityProbeAdapter
+from aiyes.adapters.android_capability_probe_adapter import (
+    AndroidCapabilityProbeAdapter,
+)
 from aiyes.adapters.android_input_adapter import AdbInputAdapter
 from aiyes.adapters.android_screenshot_adapter import AdbScreenshotAdapter
 from aiyes.adapters.android_tree_adapter import AndroidUiAutomatorTreeAdapter
@@ -604,6 +606,8 @@ _scenario_real_executor = ScenarioUseCaseExecutor(
     screenshot=screenshot_uc,
     session_stop=session_stop_uc,
     navigate=navigate_uc,
+    wait=wait_uc,
+    wait_stable=wait_stable_uc,
 )
 scenario_real_run_uc = ScenarioRunUseCase(
     executor=_scenario_real_executor,

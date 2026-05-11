@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Optional
 
 from aiyes.domain.scenario import ScenarioStep
+from aiyes.domain.scenario_assertions import evaluate_scenario_assertion
 from aiyes.ports.scenario_executor import ScenarioStepExecutionResult
 
 
@@ -25,6 +26,8 @@ class ScenarioUseCaseExecutor:
         screenshot: Any,
         session_stop: Any,
         navigate: Any = None,
+        wait: Any = None,
+        wait_stable: Any = None,
     ) -> None:
         self._session_start = session_start
         self._inspect = inspect
@@ -34,11 +37,16 @@ class ScenarioUseCaseExecutor:
         self._screenshot = screenshot
         self._session_stop = session_stop
         self._navigate = navigate
+        self._wait = wait
+        self._wait_stable = wait_stable
         self._session_id = ""
         self._outputs: dict[str, Any] = {}
 
     def execute(self, step: ScenarioStep) -> ScenarioStepExecutionResult:
         """Execute one scenario step and return a normalized result."""
+        if step.kind == "assert":
+            return self._execute_assert(step)
+
         try:
             output, session_id = self._execute(step)
         except Exception as exc:
@@ -57,6 +65,43 @@ class ScenarioUseCaseExecutor:
             output=output,
             error="",
             session_id=session_id,
+        )
+
+    def _execute_assert(self, step: ScenarioStep) -> ScenarioStepExecutionResult:
+        """Evaluate an assertion step against accumulated step outputs.
+
+        Assert needs output-on-failure semantics, unlike the other kinds
+        whose failure path is exception-only. Implementation note: the
+        assertion context is the executor's own _outputs dict, identical
+        in shape to scenario_run.py's run-layer assertion path.
+        """
+        assertion = step.parameters.get("assertion")
+        if not isinstance(assertion, Mapping):
+            assertion = {}
+        assertion_result = evaluate_scenario_assertion(assertion, self._outputs)
+        output = {
+            "assertion": {
+                "assertion_id": assertion_result.assertion_id,
+                "kind": assertion_result.kind,
+                "status": assertion_result.status,
+                "message": assertion_result.message,
+            }
+        }
+        self._outputs[step.id] = output
+        if assertion_result.status == "passed":
+            return ScenarioStepExecutionResult(
+                step_id=step.id,
+                status="passed",
+                output=output,
+                error="",
+                session_id="",
+            )
+        return ScenarioStepExecutionResult(
+            step_id=step.id,
+            status="failed",
+            output=output,
+            error=assertion_result.message,
+            session_id="",
         )
 
     def _execute(self, step: ScenarioStep) -> tuple[dict[str, Any], str]:
@@ -131,6 +176,32 @@ class ScenarioUseCaseExecutor:
             output = _jsonable_dict(result)
             self._session_id = ""
             return output, ""
+
+        if step.kind == "wait" and self._wait is not None:
+            result = self._wait.execute(
+                session_id=self._require_session(),
+                role=str(params.get("role", "*")),
+                name_pattern=params.get("name_pattern", params.get("name")),
+                timeout=params.get("timeout"),
+                state=params.get("state"),
+                absent=bool(params.get("absent", False)),
+                transient=bool(params.get("transient", False)),
+            )
+            return _jsonable_dict(result), ""
+
+        if step.kind == "wait_stable" and self._wait_stable is not None:
+            ignore_nodes = params.get("ignore_nodes", ())
+            if not isinstance(ignore_nodes, (list, tuple, frozenset, set)):
+                ignore_nodes = ()
+            result = self._wait_stable.execute(
+                session_id=self._require_session(),
+                timeout=float(params.get("timeout", 10.0)),
+                poll_interval=float(params.get("interval", 0.5)),
+                consecutive=int(params.get("consecutive", 3)),
+                tolerance=int(params.get("tolerance", 0)),
+                ignore_ids=frozenset(str(item) for item in ignore_nodes),
+            )
+            return _jsonable_dict(result), ""
 
         raise RuntimeError(f"unsupported real scenario step kind: {step.kind}")
 

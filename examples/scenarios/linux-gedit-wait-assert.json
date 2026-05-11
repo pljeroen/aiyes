@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "id": "linux-gedit-wait-assert",
+  "title": "Linux gedit wait / wait_stable / assert smoke",
+  "target": "linux",
+  "prerequisites": [
+    {
+      "kind": "executable",
+      "name": "gedit"
+    },
+    {
+      "kind": "aieyes_backend",
+      "backend": "linux"
+    }
+  ],
+  "steps": [
+    {
+      "id": "start",
+      "kind": "start_session",
+      "backend": "linux",
+      "name": "linux-gedit-wait-assert-smoke",
+      "command": ["gedit", "/tmp/aiyes-gedit-wait-assert.txt"],
+      "wait_seconds": 3,
+      "on_failure": "cleanup_then_fail"
+    },
+    {
+      "id": "wait_for_window",
+      "kind": "wait",
+      "role": "frame",
+      "timeout": 10.0,
+      "timeout_seconds": 12.0
+    },
+    {
+      "id": "tree_settles",
+      "kind": "wait_stable",
+      "timeout": 5.0,
+      "interval": 0.25,
+      "consecutive": 3,
+      "timeout_seconds": 8.0
+    },
+    {
+      "id": "inspect_after_stable",
+      "kind": "inspect",
+      "tree_depth": 4
+    },
+    {
+      "id": "assert_tree_non_empty",
+      "kind": "assert",
+      "assertion": {
+        "id": "tree_has_content",
+        "kind": "tree_non_empty",
+        "source": "inspect_after_stable"
+      }
+    }
+  ],
+  "cleanup": [
+    {
+      "id": "stop",
+      "kind": "stop_session"
+    }
+  ],
+  "evidence_policy": {
+    "bundle": true,
+    "redact_environment": true
+  }
+}
