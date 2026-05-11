@@ -69,3 +69,27 @@ class GestureUseCase:
         # Gestures are Android only — the port will raise for Linux
         self._gesture.two_finger_scroll(session, x, y, direction, amount)
         return GestureResult()
+
+    def swipe(
+        self,
+        session_id: str,
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int,
+        duration_ms: int = 300,
+    ) -> GestureResult:
+        """Single-finger swipe from (x1, y1) to (x2, y2) over duration_ms.
+
+        Distinct from two_finger_scroll — this is the natural list-scroll
+        primitive on Android, equivalent to UiScrollable.scrollIntoView()'s
+        underlying gesture. On Linux the port routes to a mouse-drag
+        substitute so scroll_into_view can dispatch swipe cross-platform.
+        """
+        if duration_ms < 0:
+            raise ValueError(f"duration_ms must be non-negative, got {duration_ms}")
+        session = self._session_repo.load(session_id)
+        if session is None:
+            raise RuntimeError(f"Session not found: {session_id}")
+        self._gesture.swipe(session, x1, y1, x2, y2, duration_ms)
+        return GestureResult()

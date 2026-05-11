@@ -32,6 +32,7 @@ class ScenarioUseCaseExecutor:
         key: Any = None,
         sleeper: Any = None,
         mouse: Any = None,
+        gesture: Any = None,
     ) -> None:
         self._session_start = session_start
         self._inspect = inspect
@@ -47,6 +48,7 @@ class ScenarioUseCaseExecutor:
         self._key = key
         self._sleeper = sleeper
         self._mouse = mouse
+        self._gesture = gesture
         self._session_id = ""
         self._outputs: dict[str, Any] = {}
 
@@ -234,6 +236,47 @@ class ScenarioUseCaseExecutor:
             self._mouse.drag(self._require_session(), x1, y1, x2, y2)
             return {"moved": True, "from": [x1, y1], "to": [x2, y2]}, ""
 
+        if step.kind == "gesture_pinch" and self._gesture is not None:
+            x, y = self._resolve_point_coords(params)
+            if "scale_factor" not in params:
+                raise RuntimeError("gesture_pinch requires scale_factor")
+            scale_factor = float(params["scale_factor"])
+            self._gesture.pinch(self._require_session(), x, y, scale_factor)
+            return {
+                "pinched": True,
+                "center": [x, y],
+                "scale_factor": scale_factor,
+            }, ""
+
+        if step.kind == "gesture_two_finger_scroll" and self._gesture is not None:
+            x, y = self._resolve_point_coords(params)
+            direction = str(params.get("direction", ""))
+            if direction not in _VALID_DIRECTIONS:
+                raise RuntimeError(
+                    f"direction_invalid: direction must be one of {sorted(_VALID_DIRECTIONS)}"
+                )
+            amount = int(params.get("amount", 3))
+            self._gesture.two_finger_scroll(
+                self._require_session(), x, y, direction, amount
+            )
+            return {
+                "scrolled": True,
+                "center": [x, y],
+                "direction": direction,
+                "amount": amount,
+            }, ""
+
+        if step.kind == "swipe" and self._gesture is not None:
+            x1, y1, x2, y2 = self._resolve_drag_coords(params)
+            duration_ms = int(params.get("duration_ms", 300))
+            self._gesture.swipe(self._require_session(), x1, y1, x2, y2, duration_ms)
+            return {
+                "swiped": True,
+                "from": [x1, y1],
+                "to": [x2, y2],
+                "duration_ms": duration_ms,
+            }, ""
+
         if step.kind == "mouse_scroll" and self._mouse is not None:
             direction = str(params.get("direction", ""))
             if direction not in _VALID_DIRECTIONS:
@@ -295,6 +338,18 @@ class ScenarioUseCaseExecutor:
         dx = int(params["dx"])
         dy = int(params["dy"])
         return (cx, cy, cx + dx, cy + dy)
+
+    def _resolve_point_coords(self, params: Mapping[str, Any]) -> tuple[int, int]:
+        """Resolve a single (x, y) point. Either literal x/y or source mode."""
+        has_literal = "x" in params and "y" in params
+        has_source = "source" in params
+        if has_literal and has_source:
+            raise RuntimeError("coord_mode_ambiguous: supply x/y OR source, not both")
+        if not has_literal and not has_source:
+            raise RuntimeError("coord_mode_missing: supply x/y or source")
+        if has_literal:
+            return (int(params["x"]), int(params["y"]))
+        return self._resolve_node_center(params["source"])
 
     def _resolve_node_center(self, source: Any) -> tuple[int, int]:
         """Resolve a source step id to the center of its first node's bounds."""

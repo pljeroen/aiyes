@@ -238,7 +238,13 @@ def _build_mcp_manifest() -> Dict[str, Any]:
             },
             "android": {
                 "session": ["start", "stop", "list", "status"],
-                "inspect": ["inspect", "find", "wait", "wait-reactive", "detect-dialog"],
+                "inspect": [
+                    "inspect",
+                    "find",
+                    "wait",
+                    "wait-reactive",
+                    "detect-dialog",
+                ],
                 "control": [
                     "action",
                     "mouse",
@@ -855,6 +861,50 @@ def mouse_drag_cmd(
         sys.exit(1)
     finally:
         _log_operation("mouse drag", sid, t0, exit_code, error)
+
+
+@cli.command("swipe")
+@click.option("--session", "session_id", default=None, help="Session ID.")
+@click.option(
+    "--duration-ms",
+    "duration_ms",
+    default=300,
+    type=int,
+    help="Swipe duration in milliseconds.",
+)
+@click.argument("x1", type=int)
+@click.argument("y1", type=int)
+@click.argument("x2", type=int)
+@click.argument("y2", type=int)
+def swipe_cmd(
+    session_id: Optional[str],
+    duration_ms: int,
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+) -> None:
+    """Single-finger swipe from (x1, y1) to (x2, y2) over duration_ms.
+
+    On Android this is the natural list-scroll gesture. On Linux the
+    swipe routes through a mouse-drag substitute because Xvfb has no
+    touch input.
+    """
+    t0 = clock.now()
+    sid = ""
+    exit_code = 0
+    error = ""
+    try:
+        sid = resolve_session_id(session_id)
+        gesture_uc.swipe(sid, x1, y1, x2, y2, duration_ms)
+        click.echo(format_status_ok())
+    except Exception as exc:
+        exit_code = 1
+        error = str(exc)
+        click.echo(format_system_error(str(exc)), err=True)
+        sys.exit(1)
+    finally:
+        _log_operation("swipe", sid, t0, exit_code, error)
 
 
 @mouse_group.command("scroll")

@@ -321,10 +321,13 @@ class TestClipboardAndroidAdapter:
         adapter = AdbClipboardAdapter()
         session = _make_android_session()
 
-        with patch(
-            "aiyes.adapters.adb_text.escape_text_for_adb",
-            side_effect=AssertionError("input text escaper must not be used"),
-        ), patch("subprocess.run") as mock_run:
+        with (
+            patch(
+                "aiyes.adapters.adb_text.escape_text_for_adb",
+                side_effect=AssertionError("input text escaper must not be used"),
+            ),
+            patch("subprocess.run") as mock_run,
+        ):
             mock_run.return_value = MagicMock(returncode=0, stderr="")
             adapter.write(session, "space percent% quote' newline\nunicode \u20ac")
 
@@ -1130,8 +1133,9 @@ class TestSchemaCountAfterGroupC:
         assert "session_capabilities" in tool_names
         assert "debug_bundle" in tool_names
 
-        # Scenario agent-usability surfaces add three scenario leaf commands.
-        assert len(result) == 37
+        # Scenario agent-usability surfaces add three scenario leaf commands;
+        # AIYES-47 adds top-level swipe.
+        assert len(result) == 38
 
 
 class TestMcpDispatchGroupC:
@@ -1154,14 +1158,14 @@ class TestMcpDispatchGroupC:
         assert "menu" in tool_names
 
     @pytest.mark.asyncio
-    async def test_mcp_list_tools_count_is_37(self) -> None:
-        """REQ-C50: MCP list_tools includes session capabilities."""
+    async def test_mcp_list_tools_count_is_38(self) -> None:
+        """REQ-C50: MCP list_tools includes capabilities and swipe."""
         from aiyes.adapters.mcp_server import create_mcp_server
 
         deps = self._make_deps()
         server = create_mcp_server(deps)
         tools = await server.list_tools()
-        assert len(tools) == 37
+        assert len(tools) == 38
 
     def _make_deps(self):
         """Build mock ServerDependencies with all required fields."""

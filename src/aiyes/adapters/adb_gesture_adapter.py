@@ -155,3 +155,30 @@ class AdbGestureAdapter:
             raise RuntimeError(f"Two-finger scroll swipe 1 failed (rc={p1.returncode})")
         if p2.returncode != 0:
             raise RuntimeError(f"Two-finger scroll swipe 2 failed (rc={p2.returncode})")
+
+    def swipe(
+        self,
+        session,
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int,
+        duration_ms: int = 300,
+    ) -> None:
+        """Single-finger swipe from (x1, y1) to (x2, y2) over duration_ms.
+
+        This is the natural Android list-scroll primitive — equivalent to
+        UiScrollable.scrollIntoView()'s underlying gesture. Distinct from
+        two_finger_scroll above, which issues two concurrent swipes for
+        true multi-touch gestures.
+        """
+        serial = _get_serial(session)
+        process = _adb_swipe(serial, x1, y1, x2, y2, duration_ms)
+        try:
+            process.wait(timeout=10 + duration_ms / 1000.0)
+        except BaseException:
+            process.kill()
+            process.wait()
+            raise
+        if process.returncode != 0:
+            raise RuntimeError(f"swipe failed (rc={process.returncode})")

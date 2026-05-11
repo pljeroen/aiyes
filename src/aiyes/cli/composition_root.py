@@ -517,7 +517,10 @@ from aiyes.domain.use_cases.menu import MenuUseCase  # noqa: E402
 _xclip = XclipAdapter()
 _adb_clipboard = AdbClipboardAdapter()
 _adb_gesture = AdbGestureAdapter()
-_linux_gesture = LinuxGestureAdapter()
+# Linux swipe routes through mouse-drag (Xvfb has no touch). Mouse
+# adapter is bound in below — gesture adapter holds a forward ref via
+# late assignment because mouse_uc is defined earlier in this module.
+_linux_gesture = LinuxGestureAdapter(mouse=mouse_uc)
 
 
 class _DispatchingClipboard:
@@ -565,6 +568,20 @@ class _DispatchingGesture:
         else:
             self._linux.two_finger_scroll(session, x, y, direction, amount)
 
+    def swipe(
+        self,
+        session: Session,
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int,
+        duration_ms: int = 300,
+    ) -> None:
+        if session.backend == "android":
+            self._android.swipe(session, x1, y1, x2, y2, duration_ms)
+        else:
+            self._linux.swipe(session, x1, y1, x2, y2, duration_ms)
+
 
 _dispatching_clipboard = _DispatchingClipboard(_xclip, _adb_clipboard)
 _dispatching_gesture = _DispatchingGesture(_linux_gesture, _adb_gesture)
@@ -611,6 +628,7 @@ _scenario_real_executor = ScenarioUseCaseExecutor(
     reactive_wait=reactive_wait_uc,
     key=key_uc,
     mouse=mouse_uc,
+    gesture=gesture_uc,
 )
 scenario_real_run_uc = ScenarioRunUseCase(
     executor=_scenario_real_executor,

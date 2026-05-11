@@ -211,14 +211,14 @@ class TestListTools:
     """MCP server list_tools returns exactly 23 tools."""
 
     @pytest.mark.asyncio
-    async def test_list_tools_count_is_37(self) -> None:
-        """BC-17: list_tools includes the capabilities command."""
+    async def test_list_tools_count_is_38(self) -> None:
+        """BC-17: list_tools includes capabilities and swipe."""
         deps = _make_mock_deps()
         server = create_mcp_server(deps)
 
         # Call list_tools handler.
         tools = await server.list_tools()
-        assert len(tools) == 37
+        assert len(tools) == 38
 
     @pytest.mark.asyncio
     async def test_tool_names_match_enumerate_commands(self) -> None:

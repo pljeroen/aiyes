@@ -143,10 +143,10 @@ class TestEnumerateCommands:
         result = enumerate_commands(cli)
         assert isinstance(result, list)
 
-    def test_enumerate_commands_count_is_37(self) -> None:
-        """BC-01: Leaf commands include session capabilities."""
+    def test_enumerate_commands_count_is_38(self) -> None:
+        """BC-01: Leaf commands include session capabilities and swipe."""
         result = enumerate_commands(cli)
-        assert len(result) == 37
+        assert len(result) == 38
 
     def test_enumerate_commands_all_commandinfo(self) -> None:
         """BC-01: Every element is a CommandInfo instance."""
@@ -260,6 +260,7 @@ class TestNamingAlgorithm:
             "scenario_run",
             "scenario_preflight",
             "scenario_fixtures",
+            "swipe",
         }
         assert tool_names == expected
 

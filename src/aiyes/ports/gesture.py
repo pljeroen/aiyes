@@ -23,3 +23,15 @@ class GesturePort(Protocol):
     ) -> None:
         """Two-finger scroll at (x, y) in given direction."""
         ...
+
+    def swipe(
+        self,
+        session: "Session",
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int,
+        duration_ms: int = 300,
+    ) -> None:
+        """Single-finger swipe from (x1, y1) to (x2, y2) over duration_ms."""
+        ...
