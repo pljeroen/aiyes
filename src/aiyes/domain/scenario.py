@@ -26,12 +26,15 @@ _VALID_STEP_KINDS = frozenset(
         "wait_reactive",
         "key",
         "sleep",
+        "mouse_drag",
+        "mouse_scroll",
         "screenshot",
         "navigate",
         "stop_session",
         "assert",
     )
 )
+_VALID_DIRECTIONS = frozenset(("up", "down", "left", "right"))
 _SLEEP_CEILING_SECONDS = 5.0
 _SLEEP_REASON_MIN_LENGTH = 20
 _VALID_FAILURE_POLICIES = frozenset(("fail", "skip", "cleanup_then_fail"))

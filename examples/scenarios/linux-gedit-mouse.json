@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "id": "linux-gedit-mouse",
+  "title": "Linux gedit mouse_scroll smoke",
+  "target": "linux",
+  "prerequisites": [
+    {
+      "kind": "executable",
+      "name": "gedit"
+    },
+    {
+      "kind": "aieyes_backend",
+      "backend": "linux"
+    }
+  ],
+  "steps": [
+    {
+      "id": "start",
+      "kind": "start_session",
+      "backend": "linux",
+      "name": "linux-gedit-mouse-smoke",
+      "command": ["gedit", "/tmp/aiyes-gedit-mouse.txt"],
+      "wait_seconds": 3,
+      "on_failure": "cleanup_then_fail"
+    },
+    {
+      "id": "wait_window",
+      "kind": "wait",
+      "role": "frame",
+      "timeout": 10.0,
+      "timeout_seconds": 12.0
+    },
+    {
+      "id": "inspect_initial",
+      "kind": "inspect",
+      "tree_depth": 4
+    },
+    {
+      "id": "scroll_down",
+      "kind": "mouse_scroll",
+      "direction": "down",
+      "amount": 3
+    }
+  ],
+  "cleanup": [
+    {
+      "id": "stop",
+      "kind": "stop_session"
+    }
+  ],
+  "evidence_policy": {
+    "bundle": true,
+    "redact_environment": true
+  }
+}

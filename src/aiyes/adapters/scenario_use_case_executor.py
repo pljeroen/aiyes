@@ -7,7 +7,7 @@ import subprocess
 from collections.abc import Mapping, Sequence
 from typing import Any, Optional
 
-from aiyes.domain.scenario import ScenarioStep
+from aiyes.domain.scenario import _VALID_DIRECTIONS, ScenarioStep
 from aiyes.domain.scenario_assertions import evaluate_scenario_assertion
 from aiyes.ports.scenario_executor import ScenarioStepExecutionResult
 
@@ -31,6 +31,7 @@ class ScenarioUseCaseExecutor:
         reactive_wait: Any = None,
         key: Any = None,
         sleeper: Any = None,
+        mouse: Any = None,
     ) -> None:
         self._session_start = session_start
         self._inspect = inspect
@@ -45,6 +46,7 @@ class ScenarioUseCaseExecutor:
         self._reactive_wait = reactive_wait
         self._key = key
         self._sleeper = sleeper
+        self._mouse = mouse
         self._session_id = ""
         self._outputs: dict[str, Any] = {}
 
@@ -227,6 +229,26 @@ class ScenarioUseCaseExecutor:
                 _time.sleep(seconds)
             return {"slept": seconds, "reason": reason}, ""
 
+        if step.kind == "mouse_drag" and self._mouse is not None:
+            x1, y1, x2, y2 = self._resolve_drag_coords(params)
+            self._mouse.drag(self._require_session(), x1, y1, x2, y2)
+            return {"moved": True, "from": [x1, y1], "to": [x2, y2]}, ""
+
+        if step.kind == "mouse_scroll" and self._mouse is not None:
+            direction = str(params.get("direction", ""))
+            if direction not in _VALID_DIRECTIONS:
+                raise RuntimeError(
+                    f"direction_invalid: direction must be one of {sorted(_VALID_DIRECTIONS)}"
+                )
+            amount = int(params.get("amount", 3))
+            sid = self._require_session()
+            source = params.get("source")
+            if source is not None:
+                cx, cy = self._resolve_node_center(source)
+                self._mouse.move(sid, cx, cy)
+            self._mouse.scroll(sid, direction, amount)
+            return {"scrolled": True, "direction": direction, "amount": amount}, ""
+
         if step.kind == "wait_stable" and self._wait_stable is not None:
             ignore_nodes = params.get("ignore_nodes", ())
             if not isinstance(ignore_nodes, (list, tuple, frozenset, set)):
@@ -247,6 +269,47 @@ class ScenarioUseCaseExecutor:
         if not self._session_id:
             raise RuntimeError("scenario step requires an active session")
         return self._session_id
+
+    def _resolve_drag_coords(
+        self, params: Mapping[str, Any]
+    ) -> tuple[int, int, int, int]:
+        """Resolve drag endpoints. Exactly one of literal/source mode required."""
+        has_literal = all(k in params for k in ("x1", "y1", "x2", "y2"))
+        has_source = "source" in params
+        if has_literal and has_source:
+            raise RuntimeError(
+                "coord_mode_ambiguous: supply literal coords OR source, not both"
+            )
+        if not has_literal and not has_source:
+            raise RuntimeError("coord_mode_missing: supply x1/y1/x2/y2 or source/dx/dy")
+        if has_literal:
+            return (
+                int(params["x1"]),
+                int(params["y1"]),
+                int(params["x2"]),
+                int(params["y2"]),
+            )
+        cx, cy = self._resolve_node_center(params["source"])
+        if "dx" not in params or "dy" not in params:
+            raise RuntimeError("coord_mode_missing: source mode requires dx and dy")
+        dx = int(params["dx"])
+        dy = int(params["dy"])
+        return (cx, cy, cx + dx, cy + dy)
+
+    def _resolve_node_center(self, source: Any) -> tuple[int, int]:
+        """Resolve a source step id to the center of its first node's bounds."""
+        if not isinstance(source, str):
+            raise RuntimeError("source_step_unknown: source must be a step id string")
+        if source not in self._outputs:
+            raise RuntimeError(f"source_step_unknown: no prior step with id {source!r}")
+        output = self._outputs[source]
+        bounds = _first_node_bounds(output)
+        if bounds is None:
+            raise RuntimeError(
+                f"source_step_no_node: step {source!r} has no node with bounds"
+            )
+        x, y, w, h = bounds
+        return (x + w // 2, y + h // 2)
 
     def _resolve_node_id(self, params: Mapping[str, Any]) -> str:
         explicit = params.get("node_id")
@@ -382,3 +445,41 @@ def _node_id(value: Any) -> str:
     else:
         raw = getattr(value, "id", getattr(value, "node_id", ""))
     return str(raw) if raw else ""
+
+
+def _first_node_bounds(value: Any) -> Optional[tuple[int, int, int, int]]:
+    """Return bounds [x, y, width, height] of the first node with bounds.
+
+    Searches the same shapes as _first_node_id: a dict with "nodes",
+    or a sequence of nodes, or a single node.
+    """
+    candidates: list[Any] = []
+    if isinstance(value, Mapping):
+        nodes = value.get("nodes")
+        if isinstance(nodes, Sequence) and not isinstance(nodes, (str, bytes)):
+            candidates.extend(nodes)
+        else:
+            candidates.append(value)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        candidates.extend(value)
+    else:
+        candidates.append(value)
+
+    for node in candidates:
+        bounds = _node_bounds(node)
+        if bounds is not None:
+            return bounds
+    return None
+
+
+def _node_bounds(value: Any) -> Optional[tuple[int, int, int, int]]:
+    if isinstance(value, Mapping):
+        raw = value.get("bounds")
+    else:
+        raw = getattr(value, "bounds", None)
+    if not isinstance(raw, (list, tuple)) or len(raw) != 4:
+        return None
+    try:
+        return (int(raw[0]), int(raw[1]), int(raw[2]), int(raw[3]))
+    except (TypeError, ValueError):
+        return None

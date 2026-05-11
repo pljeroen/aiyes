@@ -610,6 +610,7 @@ _scenario_real_executor = ScenarioUseCaseExecutor(
     wait_stable=wait_stable_uc,
     reactive_wait=reactive_wait_uc,
     key=key_uc,
+    mouse=mouse_uc,
 )
 scenario_real_run_uc = ScenarioRunUseCase(
     executor=_scenario_real_executor,
