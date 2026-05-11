@@ -23,12 +23,17 @@ _VALID_STEP_KINDS = frozenset(
         "type_text",
         "wait",
         "wait_stable",
+        "wait_reactive",
+        "key",
+        "sleep",
         "screenshot",
         "navigate",
         "stop_session",
         "assert",
     )
 )
+_SLEEP_CEILING_SECONDS = 5.0
+_SLEEP_REASON_MIN_LENGTH = 20
 _VALID_FAILURE_POLICIES = frozenset(("fail", "skip", "cleanup_then_fail"))
 _PUBLIC_DENIED_FRAGMENTS = frozenset(("/home/", "private", "/dev/"))
 
@@ -124,7 +129,9 @@ def validate_scenario_document(
 
     target = document.get("target")
     if target not in _VALID_TARGETS:
-        issues.append(_issue("target", "invalid_target", "target must be linux or android"))
+        issues.append(
+            _issue("target", "invalid_target", "target must be linux or android")
+        )
 
     prerequisites = _validate_mapping_list(
         document.get("prerequisites", ()), "prerequisites", issues
@@ -179,7 +186,14 @@ def validate_scenario_document(
 def _validate_required(
     document: Mapping[str, object], issues: list[ScenarioValidationIssue]
 ) -> None:
-    for field in ("schema_version", "id", "title", "target", "steps", "evidence_policy"):
+    for field in (
+        "schema_version",
+        "id",
+        "title",
+        "target",
+        "steps",
+        "evidence_policy",
+    ):
         if field not in document:
             issues.append(_issue(field, "missing_required", f"{field} is required"))
 
@@ -209,7 +223,9 @@ def _validate_steps(
     for index, item in enumerate(items):
         step_id = item.get("id")
         if not isinstance(step_id, str) or not _VALID_ID.match(step_id):
-            issues.append(_issue(f"{path}[{index}].id", "invalid_id", "invalid step id"))
+            issues.append(
+                _issue(f"{path}[{index}].id", "invalid_id", "invalid step id")
+            )
         kind = item.get("kind")
         if kind not in _VALID_STEP_KINDS:
             issues.append(
@@ -241,6 +257,8 @@ def _validate_steps(
                     "invalid failure policy",
                 )
             )
+        if kind == "sleep":
+            issues.extend(_validate_sleep_step(item, f"{path}[{index}]"))
         if (
             isinstance(step_id, str)
             and _VALID_ID.match(step_id)
@@ -259,6 +277,46 @@ def _validate_steps(
                 )
             )
     return tuple(steps)
+
+
+def _validate_sleep_step(
+    item: Mapping[str, Any], path: str
+) -> Tuple[ScenarioValidationIssue, ...]:
+    """Sleep is the friction-laden time-delay escape hatch.
+
+    Implementation note: special-cased here pending the general per-kind
+    parameter validation framework (follow-up contract). Reason field is
+    mandatory at length >= 20 to keep sleep usage reviewable; seconds is
+    bounded at 5.0 to prevent the kind being misused as a long pause.
+    """
+    issues: list[ScenarioValidationIssue] = []
+    seconds = item.get("seconds")
+    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool):
+        issues.append(
+            _issue(
+                f"{path}.seconds",
+                "sleep_ceiling_exceeded",
+                "sleep.seconds must be a number in [0.0, 5.0]",
+            )
+        )
+    elif seconds < 0 or seconds > _SLEEP_CEILING_SECONDS:
+        issues.append(
+            _issue(
+                f"{path}.seconds",
+                "sleep_ceiling_exceeded",
+                f"sleep.seconds must be in [0.0, {_SLEEP_CEILING_SECONDS}]",
+            )
+        )
+    reason = item.get("reason")
+    if not isinstance(reason, str) or len(reason) < _SLEEP_REASON_MIN_LENGTH:
+        issues.append(
+            _issue(
+                f"{path}.reason",
+                "sleep_reason_too_short",
+                f"sleep.reason must be a string of at least {_SLEEP_REASON_MIN_LENGTH} characters",
+            )
+        )
+    return tuple(issues)
 
 
 def _step_parameters(item: Mapping[str, Any]) -> Dict[str, Any]:
@@ -313,4 +371,3 @@ def _invalid(path: str, code: str, message: str) -> ScenarioValidationResult:
 
 def _issue(path: str, code: str, message: str) -> ScenarioValidationIssue:
     return ScenarioValidationIssue(path=path, code=code, message=message)
-

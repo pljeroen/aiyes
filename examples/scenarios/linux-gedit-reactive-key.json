@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "id": "linux-gedit-reactive-key",
+  "title": "Linux gedit wait_reactive + key smoke",
+  "target": "linux",
+  "prerequisites": [
+    {
+      "kind": "executable",
+      "name": "gedit"
+    },
+    {
+      "kind": "aieyes_backend",
+      "backend": "linux"
+    }
+  ],
+  "steps": [
+    {
+      "id": "start",
+      "kind": "start_session",
+      "backend": "linux",
+      "name": "linux-gedit-reactive-key-smoke",
+      "command": ["gedit", "/tmp/aiyes-gedit-reactive-key.txt"],
+      "wait_seconds": 3,
+      "on_failure": "cleanup_then_fail"
+    },
+    {
+      "id": "wait_for_focus",
+      "kind": "wait_reactive",
+      "condition": "focus-change",
+      "timeout": 5.0,
+      "poll_interval": 0.1,
+      "timeout_seconds": 8.0
+    },
+    {
+      "id": "type_some_text",
+      "kind": "type_text",
+      "text": "hello reactive"
+    },
+    {
+      "id": "wait_for_screen",
+      "kind": "wait_reactive",
+      "condition": "screen-change",
+      "timeout": 3.0,
+      "poll_interval": 0.1,
+      "timeout_seconds": 6.0
+    },
+    {
+      "id": "press_escape",
+      "kind": "key",
+      "keys": ["Escape"]
+    }
+  ],
+  "cleanup": [
+    {
+      "id": "stop",
+      "kind": "stop_session"
+    }
+  ],
+  "evidence_policy": {
+    "bundle": true,
+    "redact_environment": true
+  }
+}

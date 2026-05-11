@@ -28,6 +28,9 @@ class ScenarioUseCaseExecutor:
         navigate: Any = None,
         wait: Any = None,
         wait_stable: Any = None,
+        reactive_wait: Any = None,
+        key: Any = None,
+        sleeper: Any = None,
     ) -> None:
         self._session_start = session_start
         self._inspect = inspect
@@ -39,6 +42,9 @@ class ScenarioUseCaseExecutor:
         self._navigate = navigate
         self._wait = wait
         self._wait_stable = wait_stable
+        self._reactive_wait = reactive_wait
+        self._key = key
+        self._sleeper = sleeper
         self._session_id = ""
         self._outputs: dict[str, Any] = {}
 
@@ -188,6 +194,38 @@ class ScenarioUseCaseExecutor:
                 transient=bool(params.get("transient", False)),
             )
             return _jsonable_dict(result), ""
+
+        if step.kind == "wait_reactive" and self._reactive_wait is not None:
+            result = self._reactive_wait.execute(
+                session_id=self._require_session(),
+                condition=str(params.get("condition", "")),
+                name_pattern=params.get("name_pattern"),
+                timeout=float(params.get("timeout", 10.0)),
+                quiet=float(params.get("quiet", 0.0)),
+                poll_interval=float(params.get("poll_interval", 0.25)),
+            )
+            return _jsonable_dict(result), ""
+
+        if step.kind == "key" and self._key is not None:
+            keys = params.get("keys", ())
+            if not isinstance(keys, (list, tuple)) or not keys:
+                raise RuntimeError("key step requires a non-empty keys list")
+            result = self._key.execute(
+                session_id=self._require_session(),
+                key_specs=[str(item) for item in keys],
+            )
+            return _jsonable_dict(result), ""
+
+        if step.kind == "sleep":
+            seconds = float(params.get("seconds", 0.0))
+            reason = str(params.get("reason", ""))
+            if self._sleeper is not None:
+                self._sleeper.sleep(seconds)
+            else:
+                import time as _time
+
+                _time.sleep(seconds)
+            return {"slept": seconds, "reason": reason}, ""
 
         if step.kind == "wait_stable" and self._wait_stable is not None:
             ignore_nodes = params.get("ignore_nodes", ())
