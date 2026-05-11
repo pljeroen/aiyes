@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "id": "android-settings-scroll-into-view",
+  "title": "Android Settings: scroll_into_view reaches Developer entry",
+  "target": "android",
+  "prerequisites": [
+    {
+      "kind": "aieyes_backend",
+      "backend": "android"
+    },
+    {
+      "kind": "adb_device"
+    }
+  ],
+  "steps": [
+    {
+      "id": "start",
+      "kind": "start_session",
+      "backend": "android",
+      "name": "android-settings-scroll-into-view-smoke",
+      "wait_seconds": 4,
+      "on_failure": "cleanup_then_fail"
+    },
+    {
+      "id": "wait_settings",
+      "kind": "wait_reactive",
+      "condition": "screen-change",
+      "timeout": 8.0,
+      "timeout_seconds": 12.0
+    },
+    {
+      "id": "stable",
+      "kind": "wait_stable",
+      "timeout": 5.0,
+      "consecutive": 3,
+      "timeout_seconds": 8.0
+    },
+    {
+      "id": "reach_developer",
+      "kind": "scroll_into_view",
+      "role": "View",
+      "name_pattern": "Developer options",
+      "direction": "down",
+      "max_scrolls": 15,
+      "max_seconds": 45.0,
+      "timeout_seconds": 60.0
+    }
+  ],
+  "cleanup": [
+    {
+      "id": "stop",
+      "kind": "stop_session"
+    }
+  ],
+  "evidence_policy": {
+    "bundle": true,
+    "redact_environment": true
+  }
+}

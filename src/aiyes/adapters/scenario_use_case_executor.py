@@ -33,6 +33,8 @@ class ScenarioUseCaseExecutor:
         sleeper: Any = None,
         mouse: Any = None,
         gesture: Any = None,
+        session_repo: Any = None,
+        clock: Any = None,
     ) -> None:
         self._session_start = session_start
         self._inspect = inspect
@@ -49,6 +51,8 @@ class ScenarioUseCaseExecutor:
         self._sleeper = sleeper
         self._mouse = mouse
         self._gesture = gesture
+        self._session_repo = session_repo
+        self._clock = clock
         self._session_id = ""
         self._outputs: dict[str, Any] = {}
 
@@ -56,6 +60,8 @@ class ScenarioUseCaseExecutor:
         """Execute one scenario step and return a normalized result."""
         if step.kind == "assert":
             return self._execute_assert(step)
+        if step.kind == "scroll_into_view":
+            return self._execute_scroll_into_view(step)
 
         try:
             output, session_id = self._execute(step)
@@ -112,6 +118,99 @@ class ScenarioUseCaseExecutor:
             output=output,
             error=assertion_result.message,
             session_id="",
+        )
+
+    def _execute_scroll_into_view(
+        self, step: ScenarioStep
+    ) -> ScenarioStepExecutionResult:
+        """Scroll a list until target node is visible, or fail with diagnostics.
+
+        Two-bound termination: max_scrolls AND max_seconds. Cross-platform
+        via gesture.swipe — the dispatching gesture port routes to the
+        appropriate adapter (adb input swipe on Android, mouse-drag
+        substitute on Linux).
+        """
+        try:
+            session_id = self._require_session()
+        except Exception as exc:
+            return ScenarioStepExecutionResult(
+                step_id=step.id, status="failed", output={}, error=str(exc)
+            )
+
+        params = step.parameters
+        role = str(params.get("role", "*"))
+        name_pattern = params.get("name_pattern")
+        state = params.get("state")
+        direction = str(params.get("direction", "down"))
+        max_scrolls = int(params.get("max_scrolls", 10))
+        max_seconds = float(params.get("max_seconds", 30.0))
+
+        viewport = _parse_viewport(self._session_repo, session_id)
+        x1, y1, x2, y2 = _swipe_coords_for_direction(direction, viewport)
+
+        clock = self._clock
+        start = clock.now() if clock is not None else 0.0
+        attempts = 0
+
+        while True:
+            nodes = self._find.execute(
+                session_id=session_id,
+                role=role,
+                name_pattern=name_pattern,
+                state=state,
+                no_prune=False,
+            )
+            node_id = _first_node_id(nodes if isinstance(nodes, list) else nodes)
+            if node_id:
+                elapsed = (clock.now() - start) if clock is not None else 0.0
+                output = {
+                    "found": True,
+                    "node_id": node_id,
+                    "attempts": attempts,
+                    "elapsed": elapsed,
+                    "direction": direction,
+                }
+                self._outputs[step.id] = output
+                return ScenarioStepExecutionResult(
+                    step_id=step.id, status="passed", output=output, error=""
+                )
+
+            elapsed_now = (clock.now() - start) if clock is not None else 0.0
+            if attempts >= max_scrolls:
+                return self._scroll_into_view_failure(
+                    step.id, attempts, elapsed_now, direction, viewport, "scrolls"
+                )
+            if elapsed_now >= max_seconds:
+                return self._scroll_into_view_failure(
+                    step.id, attempts, elapsed_now, direction, viewport, "seconds"
+                )
+
+            self._gesture.swipe(session_id, x1, y1, x2, y2, 300)
+            attempts += 1
+
+    def _scroll_into_view_failure(
+        self,
+        step_id: str,
+        attempts: int,
+        elapsed: float,
+        direction: str,
+        viewport: tuple[int, int],
+        bound_hit: str,
+    ) -> ScenarioStepExecutionResult:
+        output = {
+            "found": False,
+            "attempts": attempts,
+            "elapsed": elapsed,
+            "direction": direction,
+            "viewport": list(viewport),
+            "bound_hit": bound_hit,
+        }
+        self._outputs[step_id] = output
+        return ScenarioStepExecutionResult(
+            step_id=step_id,
+            status="failed",
+            output=output,
+            error=f"scroll_into_view_target_not_found (bound: {bound_hit}, attempts: {attempts})",
         )
 
     def _execute(self, step: ScenarioStep) -> tuple[dict[str, Any], str]:
@@ -500,6 +599,57 @@ def _node_id(value: Any) -> str:
     else:
         raw = getattr(value, "id", getattr(value, "node_id", ""))
     return str(raw) if raw else ""
+
+
+def _parse_viewport(session_repo: Any, session_id: str) -> tuple[int, int]:
+    """Resolve viewport (width, height) from session resolution.
+
+    Falls back to (1080, 1920) — a reasonable Android phone default
+    when no session_repo is supplied or the session has no resolution
+    string. Linux Xvfb defaults to 1280x800, also handled here.
+    """
+    default = (1080, 1920)
+    if session_repo is None:
+        return default
+    try:
+        session = session_repo.load(session_id)
+    except Exception:
+        return default
+    resolution = getattr(session, "resolution", "") if session is not None else ""
+    if not isinstance(resolution, str) or "x" not in resolution:
+        return default
+    parts = resolution.lower().split("x")
+    if len(parts) != 2:
+        return default
+    try:
+        return (int(parts[0]), int(parts[1]))
+    except ValueError:
+        return default
+
+
+def _swipe_coords_for_direction(
+    direction: str, viewport: tuple[int, int]
+) -> tuple[int, int, int, int]:
+    """Compute swipe endpoints for a scroll in the given direction.
+
+    "down" scroll = swipe from lower screen region upward.
+    "up" scroll = swipe from upper region downward.
+    Horizontal directions swipe across the center row.
+    """
+    width, height = viewport
+    cx, cy = width // 2, height // 2
+    dy = height // 3
+    dx = width // 3
+    if direction == "down":
+        return (cx, cy + dy, cx, cy - dy)
+    if direction == "up":
+        return (cx, cy - dy, cx, cy + dy)
+    if direction == "left":
+        return (cx - dx, cy, cx + dx, cy)
+    if direction == "right":
+        return (cx + dx, cy, cx - dx, cy)
+    # Validator catches bad direction; defensive default.
+    return (cx, cy + dy, cx, cy - dy)
 
 
 def _first_node_bounds(value: Any) -> Optional[tuple[int, int, int, int]]:

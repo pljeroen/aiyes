@@ -31,6 +31,7 @@ _VALID_STEP_KINDS = frozenset(
         "gesture_pinch",
         "gesture_two_finger_scroll",
         "swipe",
+        "scroll_into_view",
         "screenshot",
         "navigate",
         "stop_session",
@@ -323,7 +324,71 @@ def _validate_kind_specific(
         return _validate_gesture_two_finger_scroll_step(item, path)
     if kind == "swipe":
         return _validate_swipe_step(item, path)
+    if kind == "scroll_into_view":
+        return _validate_scroll_into_view_step(item, path)
     return ()
+
+
+def _validate_scroll_into_view_step(
+    item: Mapping[str, Any], path: str
+) -> Tuple[ScenarioValidationIssue, ...]:
+    issues: list[ScenarioValidationIssue] = []
+    role = item.get("role")
+    if not isinstance(role, str) or not role:
+        issues.append(
+            _issue(
+                f"{path}.role",
+                "scroll_into_view_role_required",
+                "scroll_into_view.role must be a non-empty string",
+            )
+        )
+    name_pattern = item.get("name_pattern")
+    if not isinstance(name_pattern, str) or not name_pattern:
+        issues.append(
+            _issue(
+                f"{path}.name_pattern",
+                "scroll_into_view_name_pattern_required",
+                "scroll_into_view.name_pattern must be a non-empty string",
+            )
+        )
+    direction = item.get("direction", "down")
+    if not isinstance(direction, str) or direction not in _VALID_DIRECTIONS:
+        issues.append(
+            _issue(
+                f"{path}.direction",
+                "direction_invalid",
+                f"direction must be one of {sorted(_VALID_DIRECTIONS)}",
+            )
+        )
+    max_scrolls = item.get("max_scrolls", 10)
+    if (
+        not isinstance(max_scrolls, int)
+        or isinstance(max_scrolls, bool)
+        or max_scrolls < 1
+        or max_scrolls > 50
+    ):
+        issues.append(
+            _issue(
+                f"{path}.max_scrolls",
+                "scroll_into_view_max_scrolls_out_of_range",
+                "max_scrolls must be an integer in [1, 50]",
+            )
+        )
+    max_seconds = item.get("max_seconds", 30.0)
+    if (
+        not isinstance(max_seconds, (int, float))
+        or isinstance(max_seconds, bool)
+        or max_seconds <= 0
+        or max_seconds > 120
+    ):
+        issues.append(
+            _issue(
+                f"{path}.max_seconds",
+                "scroll_into_view_max_seconds_out_of_range",
+                "max_seconds must be a number in (0, 120]",
+            )
+        )
+    return tuple(issues)
 
 
 def _validate_wait_step(

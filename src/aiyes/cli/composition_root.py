@@ -629,6 +629,8 @@ _scenario_real_executor = ScenarioUseCaseExecutor(
     key=key_uc,
     mouse=mouse_uc,
     gesture=gesture_uc,
+    session_repo=_session_repo,
+    clock=_clock,
 )
 scenario_real_run_uc = ScenarioRunUseCase(
     executor=_scenario_real_executor,
