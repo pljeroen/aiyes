@@ -588,6 +588,14 @@ class TestAdbInputAdapterSubprocess:
             adapter.mouse_click(session, 100, 200)
 
     def test_mouse_scroll_calls_swipe(self) -> None:
+        """AIYES-94 R1: mouse_scroll issues a single adb input swipe with
+        distance = amount * 400 and explicit duration_ms = 300.
+
+        Extends the prior smoke check (which only verified 'swipe' was in
+        cmd). The new contract requires the command list to carry an
+        explicit duration_ms argument and the correct travel distance so
+        Flutter's Scrollable consumes the gesture as a controlled drag.
+        """
         from aiyes.adapters.android_input_adapter import AdbInputAdapter
 
         adapter = AdbInputAdapter()
@@ -601,10 +609,44 @@ class TestAdbInputAdapterSubprocess:
             "aiyes.adapters.android_input_adapter.subprocess.run",
             return_value=mock_result,
         ) as mock_run:
-            adapter.mouse_scroll(session, "up", 2)
+            adapter.mouse_scroll(session, "down", 3)
+
+        # R1: exactly one subprocess.run invocation (one adb call).
+        assert mock_run.call_count == 1, (
+            f"expected exactly 1 subprocess.run call; got {mock_run.call_count}"
+        )
 
         cmd = mock_run.call_args[0][0]
-        assert "swipe" in cmd
+        # Shape: [adb, -s, <serial>, shell, input, swipe, x1, y1, x2, y2, duration_ms]
+        assert "shell" in cmd, f"cmd missing 'shell': {cmd}"
+        assert "input" in cmd, f"cmd missing 'input': {cmd}"
+        assert "swipe" in cmd, f"cmd missing 'swipe': {cmd}"
+
+        swipe_idx = cmd.index("swipe")
+        assert cmd[swipe_idx - 1] == "input", (
+            f"'input' must immediately precede 'swipe': {cmd}"
+        )
+        # Exactly 5 positional args after swipe: x1, y1, x2, y2, duration_ms.
+        tail = cmd[swipe_idx + 1 :]
+        assert len(tail) == 5, (
+            f"expected 5 positional args after 'swipe' "
+            f"(x1 y1 x2 y2 duration_ms); got {len(tail)}: {tail}"
+        )
+
+        x1, y1, x2, y2, duration_ms = tail
+        # mouse_scroll uses fixed centre (540, 960). For direction="down",
+        # amount=3: distance = 3 * 400 = 1200; the swipe goes from
+        # (540, 960 - 1200) → (540, 960 + 1200) = (540, -240) → (540, 2160).
+        # We assert the math the adapter computes; adb itself may clamp.
+        assert x1 == "540", f"x1 expected '540', got {x1!r}"
+        assert x2 == "540", f"x2 expected '540' (vertical scroll), got {x2!r}"
+        # R1: |y2 - y1| == amount * 400 = 1200.
+        assert abs(int(y2) - int(y1)) == 1200, (
+            f"|y2 - y1| expected 1200 (= amount*400); got "
+            f"|{y2} - {y1}| = {abs(int(y2) - int(y1))}"
+        )
+        # R1: explicit duration_ms == 300.
+        assert duration_ms == "300", f"duration_ms expected '300', got {duration_ms!r}"
 
 
 # ═══════════════════════════════════════════════════════════════════════

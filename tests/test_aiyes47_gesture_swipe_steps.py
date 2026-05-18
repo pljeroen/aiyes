@@ -1,14 +1,15 @@
 """AIYES-47: gesture_pinch, gesture_two_finger_scroll, swipe step kinds.
 
 Wires the gesture family as scenario step kinds (existing GestureUseCase)
-and adds the new single-finger swipe primitive (use case + adapter + CLI
+and adds the single-finger swipe primitive (use case + adapter + CLI
 command). All four positional kinds support literal and source-anchored
 coord modes.
 
-The swipe primitive is needed because gesture_two_finger_scroll is a
-true two-finger gesture (verified two concurrent adb input swipes), not
-a list-scroll primitive. scroll_into_view (AIYES-49) dispatches to swipe
-on Android and mouse_scroll on Linux.
+The swipe primitive is the natural Android list-scroll primitive.
+gesture_two_finger_scroll is also a single-finger adb emulation after
+AIYES-94 — the "two-finger" label is preserved for caller compatibility
+but no multitouch event is emitted. scroll_into_view (AIYES-49)
+dispatches to swipe on Android and mouse_scroll on Linux.
 """
 
 from __future__ import annotations

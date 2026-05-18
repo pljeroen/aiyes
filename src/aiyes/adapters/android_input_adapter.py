@@ -152,17 +152,24 @@ class AdbInputAdapter:
         )
 
     def mouse_scroll(self, session, direction: str, amount: int = 3) -> None:
-        """Scroll via adb shell input swipe with vertical/horizontal offset."""
+        """Scroll via a single-finger adb input swipe; no multitouch event is emitted.
+
+        Issues ``adb shell input swipe x1 y1 x2 y2 300`` from screen center
+        with distance proportional to ``amount`` (400 px per unit). The
+        explicit 300 ms duration keeps Flutter's Scrollable from
+        classifying the gesture as a fling.
+        """
+        duration_ms = 300
         serial = _get_serial(session)
         # Swipe from center; distance proportional to amount
         cx, cy = 540, 960
-        distance = amount * 100
+        distance = amount * 400
 
         direction_offsets = {
-            "up": (cx, cy + distance, cx, cy - distance),
-            "down": (cx, cy - distance, cx, cy + distance),
-            "left": (cx + distance, cy, cx - distance, cy),
-            "right": (cx - distance, cy, cx + distance, cy),
+            "up": (cx, cy, cx, cy - distance),
+            "down": (cx, cy, cx, cy + distance),
+            "left": (cx, cy, cx - distance, cy),
+            "right": (cx, cy, cx + distance, cy),
         }
 
         coords = direction_offsets.get(direction, direction_offsets["down"])
@@ -175,6 +182,7 @@ class AdbInputAdapter:
                 str(coords[1]),
                 str(coords[2]),
                 str(coords[3]),
+                str(duration_ms),
             ],
         )
 

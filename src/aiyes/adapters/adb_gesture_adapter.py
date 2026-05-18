@@ -1,8 +1,11 @@
 """AdbGestureAdapter — implements GesturePort via adb shell input.
 
-Uses two concurrent `adb shell input swipe` commands as a best-effort
-approximation for pinch-to-zoom and two-finger scroll. This is restricted
-gesture support, not evidence of reliable Android multi-pointer injection.
+Two-finger scroll is emulated as a single-finger drag because
+`adb shell input` is a single-pointer API and a single drag is
+what Flutter/Android scroll recognizers actually consume. Pinch
+still uses two concurrent `adb shell input swipe` processes as a
+best-effort approximation; reliability on Flutter is not
+guaranteed and is tracked as a follow-up to AIYES-94.
 """
 
 from __future__ import annotations
@@ -106,12 +109,16 @@ class AdbGestureAdapter:
     def two_finger_scroll(
         self, session, x: int, y: int, direction: str, amount: int = 3
     ) -> None:
-        """Two-finger scroll via two concurrent swipes in the same direction."""
-        serial = _get_serial(session)
+        """Single-finger drag emulating a two-finger scroll; no multitouch event is emitted.
 
-        # Two fingers side by side, scrolling together
-        finger_gap = 50
-        distance = amount * 50
+        Two-finger semantics are emulated with a single adb input swipe
+        anchored at (x, y) because `adb shell input` is a single-pointer
+        API. This produces the same observable viewport motion in apps
+        whose scroll recognizers accept single-pointer drags (Flutter,
+        most native Android views).
+        """
+        serial = _get_serial(session)
+        distance = amount * 400
         duration_ms = 300
 
         direction_offsets = {
@@ -122,39 +129,18 @@ class AdbGestureAdapter:
         }
         dx, dy = direction_offsets.get(direction, (0, -distance))
 
-        # Finger 1: left of center
-        p1 = _adb_swipe(
-            serial,
-            x - finger_gap,
-            y,
-            x - finger_gap + dx,
-            y + dy,
-            duration_ms,
-        )
-        # Finger 2: right of center
-        p2 = _adb_swipe(
-            serial,
-            x + finger_gap,
-            y,
-            x + finger_gap + dx,
-            y + dy,
-            duration_ms,
-        )
-
+        process = _adb_swipe(serial, x, y, x + dx, y + dy, duration_ms)
         try:
-            p1.wait(timeout=10)
-            p2.wait(timeout=10)
+            process.wait(timeout=10)
         except BaseException:
-            p1.kill()
-            p2.kill()
-            p1.wait()
-            p2.wait()
+            process.kill()
+            process.wait()
             raise
 
-        if p1.returncode != 0:
-            raise RuntimeError(f"Two-finger scroll swipe 1 failed (rc={p1.returncode})")
-        if p2.returncode != 0:
-            raise RuntimeError(f"Two-finger scroll swipe 2 failed (rc={p2.returncode})")
+        if process.returncode != 0:
+            raise RuntimeError(
+                f"two_finger_scroll swipe failed (rc={process.returncode})"
+            )
 
     def swipe(
         self,
@@ -169,8 +155,10 @@ class AdbGestureAdapter:
 
         This is the natural Android list-scroll primitive — equivalent to
         UiScrollable.scrollIntoView()'s underlying gesture. Distinct from
-        two_finger_scroll above, which issues two concurrent swipes for
-        true multi-touch gestures.
+        two_finger_scroll above only in API naming: two_finger_scroll is
+        also a single-finger adb emulation (the "two-finger" label is
+        preserved for caller compatibility; no multitouch event is
+        emitted by either method).
         """
         serial = _get_serial(session)
         process = _adb_swipe(serial, x1, y1, x2, y2, duration_ms)

@@ -501,7 +501,13 @@ class TestGestureAndroidAdapter:
         assert mock_popen.call_count == 2
 
     def test_two_finger_scroll_uses_adb_swipe(self) -> None:
-        """REQ-C18: two_finger_scroll runs two concurrent swipes."""
+        """AIYES-94 R2: two_finger_scroll issues exactly ONE adb input swipe with
+        explicit duration_ms.
+
+        Supersedes the prior REQ-C18 two-concurrent-swipes assertion: the new
+        contract reimplements two_finger_scroll as a single-finger drag (no
+        multitouch). See AIYES-94 INTEGRATION_MAP RC-2 and supersessions.
+        """
         from aiyes.adapters.adb_gesture_adapter import AdbGestureAdapter
 
         adapter = AdbGestureAdapter()
@@ -513,9 +519,45 @@ class TestGestureAndroidAdapter:
             proc.returncode = 0
             mock_popen.return_value = proc
 
-            adapter.two_finger_scroll(session, x=500, y=800, direction="up", amount=5)
+            # Use y=1500 so direction="up" with amount=3 (distance=1200) stays
+            # in-bounds: y2 = 1500 - 1200 = 300 (>= 0). The contract asserts
+            # math, not adb's clamping behaviour.
+            adapter.two_finger_scroll(session, x=540, y=1500, direction="up", amount=3)
 
-        assert mock_popen.call_count == 2
+        # R2: exactly one swipe Popen (single-finger drag), not two.
+        assert mock_popen.call_count == 1
+
+        # Inspect the single Popen invocation's argv.
+        argv = mock_popen.call_args[0][0]
+        # argv shape: [adb, -s, <serial>, shell, input, swipe, x1, y1, x2, y2, duration_ms]
+        # Find the "input" / "swipe" pair, then assert exactly 5 positional
+        # arguments follow ("x1 y1 x2 y2 duration_ms").
+        assert "shell" in argv, f"argv missing 'shell': {argv}"
+        assert "input" in argv, f"argv missing 'input': {argv}"
+        assert "swipe" in argv, f"argv missing 'swipe': {argv}"
+
+        swipe_idx = argv.index("swipe")
+        # "input" must immediately precede "swipe"
+        assert argv[swipe_idx - 1] == "input", (
+            f"'input' must immediately precede 'swipe' in argv: {argv}"
+        )
+        # Exactly 5 positional args follow "swipe": x1, y1, x2, y2, duration_ms
+        tail = argv[swipe_idx + 1 :]
+        assert len(tail) == 5, (
+            f"expected 5 positional args after 'swipe' "
+            f"(x1 y1 x2 y2 duration_ms); got {len(tail)}: {tail}"
+        )
+
+        x1, y1, x2, y2, duration_ms = tail
+        # Anchor at (540, 1500); direction=up means y decreases by 1200.
+        assert x1 == "540", f"x1 expected '540', got {x1!r}"
+        assert y1 == "1500", f"y1 expected '1500', got {y1!r}"
+        assert x2 == "540", f"x2 expected '540' (vertical scroll), got {x2!r}"
+        assert y2 == "300", (
+            f"y2 expected '300' (1500 - amount*400 = 1500 - 1200), got {y2!r}"
+        )
+        # R1/R2: duration_ms == 300.
+        assert duration_ms == "300", f"duration_ms expected '300', got {duration_ms!r}"
 
 
 class TestGestureLinuxAdapter:
@@ -1362,30 +1404,40 @@ class TestA10C03ZombieProcessFix:
         proc1.kill.assert_called_once()
         proc2.kill.assert_called_once()
 
-    def test_two_finger_scroll_timeout_kills_both_processes(self) -> None:
-        """A10-C03: both scroll processes are killed on timeout."""
-        import subprocess as sp
+    def test_two_finger_scroll_propagates_subprocess_failure(self) -> None:
+        """AIYES-94 R2: a non-zero rc from the single swipe Popen surfaces as a
+        RuntimeError.
+
+        Replaces test_two_finger_scroll_timeout_kills_both_processes — the
+        new single-swipe implementation has only one Popen, so the dual-kill
+        cleanup test is obsolete (per AIYES-94 A2 supersession rule R2: no
+        shim, no bridge).
+        """
         from aiyes.adapters.adb_gesture_adapter import AdbGestureAdapter
 
         adapter = AdbGestureAdapter()
         session = _make_android_session()
 
         with patch("subprocess.Popen") as mock_popen:
-            proc1 = MagicMock()
-            proc1.wait.side_effect = sp.TimeoutExpired(cmd="adb", timeout=10)
-            proc1.returncode = None
-            proc2 = MagicMock()
-            proc2.wait.return_value = 0
-            proc2.returncode = 0
-            mock_popen.side_effect = [proc1, proc2]
+            proc = MagicMock()
+            proc.wait.return_value = 1
+            proc.returncode = 1
+            mock_popen.return_value = proc
 
-            with pytest.raises(sp.TimeoutExpired):
+            with pytest.raises(RuntimeError) as excinfo:
                 adapter.two_finger_scroll(
-                    session, x=500, y=800, direction="up", amount=3
+                    session, x=540, y=960, direction="down", amount=3
                 )
 
-        proc1.kill.assert_called_once()
-        proc2.kill.assert_called_once()
+        # Exactly one Popen call (single-finger drag).
+        assert mock_popen.call_count == 1
+        # The error message must give the operator a useful clue — either
+        # mention the command kind ("swipe") or include the return code.
+        msg = str(excinfo.value).lower()
+        assert "swipe" in msg or "rc=" in msg, (
+            f"RuntimeError message must mention 'swipe' or 'rc='; got: "
+            f"{excinfo.value!r}"
+        )
 
 
 class TestA10C05AmountValidation:
