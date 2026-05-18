@@ -525,6 +525,7 @@ class TestAdapterBoundaries:
         _SHARED_ADAPTER_UTILS = {
             "aiyes.adapters.adb_path",
             "aiyes.adapters.adb_text",
+            "aiyes.adapters.android_device_metrics_adapter",
             "aiyes.adapters.atspi_subprocess_worker",
             "aiyes.adapters.atspi_worker_connection",
         }

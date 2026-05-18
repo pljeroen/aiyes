@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import subprocess
+import sys
 from collections.abc import Mapping, Sequence
 from typing import Any, Optional
 
@@ -55,6 +56,7 @@ class ScenarioUseCaseExecutor:
         self._clock = clock
         self._session_id = ""
         self._outputs: dict[str, Any] = {}
+        self._viewport_cache: dict[str, tuple[int, int]] = {}
 
     def execute(self, step: ScenarioStep) -> ScenarioStepExecutionResult:
         """Execute one scenario step and return a normalized result."""
@@ -145,7 +147,9 @@ class ScenarioUseCaseExecutor:
         max_scrolls = int(params.get("max_scrolls", 10))
         max_seconds = float(params.get("max_seconds", 30.0))
 
-        viewport = _parse_viewport(self._session_repo, session_id)
+        viewport = _parse_viewport(
+            self._session_repo, session_id, _cache=self._viewport_cache
+        )
         x1, y1, x2, y2 = _swipe_coords_for_direction(direction, viewport)
 
         clock = self._clock
@@ -601,20 +605,59 @@ def _node_id(value: Any) -> str:
     return str(raw) if raw else ""
 
 
-def _parse_viewport(session_repo: Any, session_id: str) -> tuple[int, int]:
-    """Resolve viewport (width, height) from session resolution.
+def _parse_viewport(
+    session_repo: Any,
+    session_id: str,
+    _cache: Optional[dict[str, tuple[int, int]]] = None,
+) -> tuple[int, int]:
+    """Resolve viewport (width, height) from session.
 
-    Falls back to (1080, 1920) — a reasonable Android phone default
-    when no session_repo is supplied or the session has no resolution
-    string. Linux Xvfb defaults to 1280x800, also handled here.
+    On Android sessions with a device_serial, queries the device via
+    ``adb shell wm size`` and caches per session_id. On Linux, parses
+    ``session.resolution``. Returns (1080, 1920) on any failure with a
+    single stderr warning naming the device serial (Android failures
+    only).
     """
     default = (1080, 1920)
+
+    if _cache is not None and session_id in _cache:
+        return _cache[session_id]
+
     if session_repo is None:
         return default
+
     try:
         session = session_repo.load(session_id)
     except Exception:
         return default
+    if session is None:
+        return default
+
+    backend = getattr(session, "backend", "")
+    device_serial = getattr(session, "device_serial", "")
+
+    if backend == "android" and device_serial:
+        from aiyes.adapters.android_device_metrics_adapter import (
+            query_device_metrics,
+        )
+
+        metrics, reason = query_device_metrics(device_serial)
+        if metrics is None:
+            # Do not cache the fallback — a transient failure (timeout,
+            # daemon not yet up) shouldn't poison every subsequent scroll
+            # step in the same session.
+            print(
+                f"aiyes: warning: wm size query failed for device "
+                f"{device_serial!r} ({reason}); falling back to "
+                f"viewport {default}.",
+                file=sys.stderr,
+            )
+            return default
+        if _cache is not None:
+            _cache[session_id] = metrics
+        return metrics
+
+    # Linux / default path
     resolution = getattr(session, "resolution", "") if session is not None else ""
     if not isinstance(resolution, str) or "x" not in resolution:
         return default
