@@ -158,6 +158,13 @@ class AdbInputAdapter:
         with distance proportional to ``amount`` (400 px per unit). The
         explicit 300 ms duration keeps Flutter's Scrollable from
         classifying the gesture as a fling.
+
+        Direction convention: the named direction is where the *viewport*
+        scrolls (which content is revealed). The emitted finger swipe is
+        the inverse -- e.g., ``direction='up'`` reveals content above and
+        is emitted as a finger swipe downward. This matches mouse-wheel
+        UIs, touch-UI naming norms (iOS HIG / Material Design), and the
+        project's scroll_into_view step.
         """
         duration_ms = 300
         serial = _get_serial(session)
@@ -166,10 +173,14 @@ class AdbInputAdapter:
         distance = amount * 400
 
         direction_offsets = {
-            "up": (cx, cy, cx, cy - distance),
-            "down": (cx, cy, cx, cy + distance),
-            "left": (cx, cy, cx - distance, cy),
-            "right": (cx, cy, cx + distance, cy),
+            # "up" = reveal content ABOVE -> finger swipes DOWN (y2 > y1)
+            "up": (cx, cy, cx, cy + distance),
+            # "down" = reveal content BELOW -> finger swipes UP (y2 < y1)
+            "down": (cx, cy, cx, cy - distance),
+            # "left" = reveal content LEFT -> finger swipes RIGHT (x2 > x1)
+            "left": (cx, cy, cx + distance, cy),
+            # "right" = reveal content RIGHT -> finger swipes LEFT (x2 < x1)
+            "right": (cx, cy, cx - distance, cy),
         }
 
         coords = direction_offsets.get(direction, direction_offsets["down"])

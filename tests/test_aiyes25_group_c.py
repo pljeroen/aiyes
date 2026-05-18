@@ -519,9 +519,9 @@ class TestGestureAndroidAdapter:
             proc.returncode = 0
             mock_popen.return_value = proc
 
-            # Use y=1500 so direction="up" with amount=3 (distance=1200) stays
-            # in-bounds: y2 = 1500 - 1200 = 300 (>= 0). The contract asserts
-            # math, not adb's clamping behaviour.
+            # AIYES-96 view-direction convention: direction="up" means
+            # reveal content above → finger swipes DOWN → y INCREASES.
+            # Anchor y=1500, amount=3 (distance=1200) → y2 = 1500 + 1200 = 2700.
             adapter.two_finger_scroll(session, x=540, y=1500, direction="up", amount=3)
 
         # R2: exactly one swipe Popen (single-finger drag), not two.
@@ -549,12 +549,13 @@ class TestGestureAndroidAdapter:
         )
 
         x1, y1, x2, y2, duration_ms = tail
-        # Anchor at (540, 1500); direction=up means y decreases by 1200.
+        # AIYES-96 view-direction: anchor (540, 1500); direction="up" reveals
+        # content above → finger swipes DOWN → y INCREASES by 1200.
         assert x1 == "540", f"x1 expected '540', got {x1!r}"
         assert y1 == "1500", f"y1 expected '1500', got {y1!r}"
         assert x2 == "540", f"x2 expected '540' (vertical scroll), got {x2!r}"
-        assert y2 == "300", (
-            f"y2 expected '300' (1500 - amount*400 = 1500 - 1200), got {y2!r}"
+        assert y2 == "2700", (
+            f"y2 expected '2700' (1500 + amount*400 = 1500 + 1200), got {y2!r}"
         )
         # R1/R2: duration_ms == 300.
         assert duration_ms == "300", f"duration_ms expected '300', got {duration_ms!r}"

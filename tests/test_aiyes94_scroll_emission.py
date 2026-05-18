@@ -135,12 +135,15 @@ class TestMouseScrollEmission:
     @pytest.mark.parametrize(
         "direction,amount,expected_dx,expected_dy",
         [
-            ("up", 1, 0, -400),
-            ("up", 3, 0, -1200),
-            ("down", 1, 0, 400),
-            ("down", 4, 0, 1600),
-            ("left", 2, -800, 0),
-            ("right", 2, 800, 0),
+            # AIYES-96: view-direction convention. "up" reveals content
+            # above → finger moves DOWN → dy POSITIVE. Symmetric for the
+            # other three directions. See AIYES-96 R1.
+            ("up", 1, 0, 400),
+            ("up", 3, 0, 1200),
+            ("down", 1, 0, -400),
+            ("down", 4, 0, -1600),
+            ("left", 2, 800, 0),
+            ("right", 2, -800, 0),
         ],
     )
     def test_mouse_scroll_directions(
@@ -151,8 +154,10 @@ class TestMouseScrollEmission:
         expected_dy: int,
     ) -> None:
         """For each direction, mouse_scroll emits a swipe from screen center
-        (540, 960) to (540 + dx, 960 + dy) with dx/dy = amount * 400 in the
-        requested axis. Catches sign and axis regressions (F-4)."""
+        (540, 960) under view-direction convention (AIYES-96): the finger
+        moves OPPOSITE to the named direction so the viewport scrolls TO
+        the named direction (reveals content there). Catches sign and axis
+        regressions (F-4)."""
         from aiyes.adapters.android_input_adapter import AdbInputAdapter
 
         adapter = AdbInputAdapter()
@@ -195,8 +200,9 @@ class TestTwoFingerScrollEmission:
     at (x, y), with distance = amount * 400 and duration_ms = 300."""
 
     def test_two_finger_scroll_invokes_single_swipe_with_anchor(self) -> None:
-        """One Popen, anchor (540, 1200), amount=2 → (540,1200)→(540,400),
-        duration_ms == '300'."""
+        """One Popen, anchor (540, 1200), amount=2, direction='up' (view-
+        direction: reveal content above → finger swipes DOWN) → end point
+        (540, 2000), duration_ms == '300'. See AIYES-96 R2."""
         from aiyes.adapters.adb_gesture_adapter import AdbGestureAdapter
 
         adapter = AdbGestureAdapter()
@@ -218,24 +224,28 @@ class TestTwoFingerScrollEmission:
         argv = mock_popen.call_args[0][0]
         x1, y1, x2, y2, duration_ms = _extract_swipe_tail(argv)
 
-        # Anchor at (540, 1200); direction=up → y decreases by amount*400=800.
+        # AIYES-96 view-direction: anchor (540, 1200); direction="up" means
+        # reveal content above → finger swipes DOWN → y INCREASES by
+        # amount*400=800 → y2 = 1200 + 800 = 2000.
         assert x1 == "540", f"x1 expected '540', got {x1!r}"
         assert y1 == "1200", f"y1 expected '1200', got {y1!r}"
         assert x2 == "540", f"x2 expected '540', got {x2!r}"
-        assert y2 == "400", (
-            f"y2 expected '400' (1200 - amount*400 = 1200 - 800); got {y2!r}"
+        assert y2 == "2000", (
+            f"y2 expected '2000' (1200 + amount*400 = 1200 + 800); got {y2!r}"
         )
         assert duration_ms == "300", f"duration_ms expected '300', got {duration_ms!r}"
 
     @pytest.mark.parametrize(
         "direction,amount,expected_dx,expected_dy",
         [
-            ("up", 1, 0, -400),
-            ("up", 3, 0, -1200),
-            ("down", 1, 0, 400),
-            ("down", 4, 0, 1600),
-            ("left", 2, -800, 0),
-            ("right", 2, 800, 0),
+            # AIYES-96 view-direction convention. "up" = reveal above =
+            # finger moves DOWN = dy POSITIVE; symmetric for the others.
+            ("up", 1, 0, 400),
+            ("up", 3, 0, 1200),
+            ("down", 1, 0, -400),
+            ("down", 4, 0, -1600),
+            ("left", 2, 800, 0),
+            ("right", 2, -800, 0),
         ],
     )
     def test_two_finger_scroll_directions(

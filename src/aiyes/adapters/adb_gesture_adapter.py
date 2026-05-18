@@ -116,18 +116,26 @@ class AdbGestureAdapter:
         API. This produces the same observable viewport motion in apps
         whose scroll recognizers accept single-pointer drags (Flutter,
         most native Android views).
+
+        Direction convention: the named direction is where the *viewport*
+        scrolls (which content is revealed). The emitted finger swipe is
+        the inverse -- e.g., ``direction='up'`` reveals content above and
+        is emitted as a finger swipe downward. This matches mouse-wheel
+        UIs, touch-UI naming norms (iOS HIG / Material Design), and the
+        project's scroll_into_view step.
         """
         serial = _get_serial(session)
         distance = amount * 400
         duration_ms = 300
 
         direction_offsets = {
-            "up": (0, -distance),
-            "down": (0, distance),
-            "left": (-distance, 0),
-            "right": (distance, 0),
+            # view-direction: named "up" reveals content above -> finger DOWN
+            "up": (0, distance),
+            "down": (0, -distance),
+            "left": (distance, 0),
+            "right": (-distance, 0),
         }
-        dx, dy = direction_offsets.get(direction, (0, -distance))
+        dx, dy = direction_offsets.get(direction, (0, distance))
 
         process = _adb_swipe(serial, x, y, x + dx, y + dy, duration_ms)
         try:
