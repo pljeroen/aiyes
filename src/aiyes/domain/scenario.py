@@ -303,8 +303,8 @@ def _validate_kind_specific(
 
     Implementation note: covers the kinds added in AIYES-44..47. Earlier
     kinds (start_session, inspect, find, action, type_text, screenshot,
-    navigate, stop_session, assert) keep their executor-level validation
-    pending the wider retrofit (follow-up contract).
+    navigate, stop_session) keep their executor-level validation pending the
+    wider retrofit (follow-up contract).
     """
     if kind == "sleep":
         return _validate_sleep_step(item, path)
@@ -326,7 +326,29 @@ def _validate_kind_specific(
         return _validate_swipe_step(item, path)
     if kind == "scroll_into_view":
         return _validate_scroll_into_view_step(item, path)
+    if kind == "assert":
+        return _validate_assert_step(item, path)
     return ()
+
+
+def _validate_assert_step(
+    item: Mapping[str, Any], path: str
+) -> Tuple[ScenarioValidationIssue, ...]:
+    assertion = item.get("assertion")
+    if not isinstance(assertion, Mapping):
+        return ()
+    if assertion.get("kind") != "text_or_name_matches":
+        return ()
+    expect_present = assertion.get("expect_present", True)
+    if isinstance(expect_present, bool):
+        return ()
+    return (
+        _issue(
+            f"{path}.assertion.expect_present",
+            "assertion_expect_present_invalid",
+            "text_or_name_matches.expect_present must be a boolean",
+        ),
+    )
 
 
 def _validate_scroll_into_view_step(

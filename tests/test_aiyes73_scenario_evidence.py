@@ -9,6 +9,7 @@ from click.testing import CliRunner
 
 from aiyes.adapters.scenario_evidence import write_scenario_evidence_bundle
 from aiyes.cli.main import cli
+from aiyes.domain.scenario import validate_scenario_document
 from aiyes.domain.scenario_assertions import evaluate_scenario_assertion
 from aiyes.domain.use_cases.scenario_run import ScenarioRunResult, ScenarioRunStepResult
 
@@ -67,6 +68,71 @@ def test_text_or_name_matches_searches_tree_text() -> None:
     )
 
     assert result.status == "passed"
+
+
+def test_text_or_name_matches_expect_present_false_passes_when_absent() -> None:
+    result = evaluate_scenario_assertion(
+        {
+            "id": "no_redscreen",
+            "kind": "text_or_name_matches",
+            "pattern": "Failed assertion",
+            "expect_present": False,
+        },
+        {"inspect": {"tree": {"name": "Editor", "children": [{"text": "Ready"}]}}},
+    )
+
+    assert result.status == "passed"
+
+
+def test_text_or_name_matches_expect_present_false_fails_when_present() -> None:
+    result = evaluate_scenario_assertion(
+        {
+            "id": "no_redscreen",
+            "kind": "text_or_name_matches",
+            "pattern": "Failed assertion",
+            "expect_present": False,
+        },
+        {
+            "inspect": {
+                "tree": {
+                    "name": "Editor",
+                    "children": [{"text": "Failed assertion: overflow"}],
+                }
+            }
+        },
+    )
+
+    assert result.status == "failed"
+    assert "unexpectedly found" in result.message
+
+
+def test_text_or_name_matches_expect_present_must_be_bool_at_load_time() -> None:
+    result = validate_scenario_document(
+        {
+            "schema_version": 1,
+            "id": "assert-negation",
+            "title": "Assert negation",
+            "target": "android",
+            "steps": [
+                {
+                    "id": "no_redscreen",
+                    "kind": "assert",
+                    "assertion": {
+                        "id": "no_redscreen",
+                        "kind": "text_or_name_matches",
+                        "pattern": "Failed assertion",
+                        "expect_present": "false",
+                    },
+                }
+            ],
+            "evidence_policy": {},
+        }
+    )
+
+    assert not result.ok
+    assert any(
+        issue.code == "assertion_expect_present_invalid" for issue in result.issues
+    )
 
 
 def test_tree_changed_assertion_uses_diff_payload() -> None:

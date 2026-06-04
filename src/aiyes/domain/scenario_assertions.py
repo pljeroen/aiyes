@@ -38,8 +38,20 @@ def evaluate_scenario_assertion(
         return _result(assertion_id, kind, ok, "screenshot file does not exist")
     if kind == "text_or_name_matches":
         pattern = str(assertion.get("pattern", "")).lower()
-        ok = bool(pattern) and any(pattern in value.lower() for value in _tree_strings(context))
-        return _result(assertion_id, kind, ok, "pattern not found in tree text/name")
+        raw_expect_present = assertion.get("expect_present", True)
+        expect_present = (
+            raw_expect_present if isinstance(raw_expect_present, bool) else True
+        )
+        present = bool(pattern) and any(
+            pattern in value.lower() for value in _tree_strings(context)
+        )
+        ok = present if expect_present else bool(pattern) and not present
+        message = (
+            "pattern not found in tree text/name"
+            if expect_present
+            else "pattern unexpectedly found in tree text/name"
+        )
+        return _result(assertion_id, kind, ok, message)
     if kind == "tree_changed":
         payload = _source(assertion, context)
         ok = _diff_has_changes(payload)
