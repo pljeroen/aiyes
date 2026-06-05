@@ -117,3 +117,22 @@ Passing criterion:
 
 Maintainers may keep additional private Android app smoke checks locally. Those
 fixtures must stay untracked until the target app itself is public.
+
+## Socialzzz Android opt-in smoke
+
+Use this only when a Socialzzz Android app is installed on a trusted emulator or
+device and the Socialzzz scenario directory is available locally. The harness is
+skipped unless `--run-real` or `AIYES_RUN_REAL_SMOKE=1` is set.
+
+```bash
+AIYES_SOCIALZZZ_DEVICE_SERIAL=emulator-5554 \
+AIYES_SOCIALZZZ_APP_PACKAGE=com.socialzzz.socialzzz \
+AIYES_SOCIALZZZ_SCENARIO_DIR=/home/jeroen/dev/socialzzz/test/scenarios \
+python -m aiyes.smoke_harness \
+  --target socialzzz-android \
+  --run-real \
+  --output /tmp/aiyes-socialzzz-android-smoke.json
+```
+
+Optional: set `AIYES_SOCIALZZZ_SCENARIOS` to a comma-separated list of scenario
+filenames when running a narrower local subset.
