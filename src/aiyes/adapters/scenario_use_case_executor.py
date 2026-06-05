@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
@@ -12,6 +14,8 @@ from aiyes.domain.scenario import _VALID_DIRECTIONS, ScenarioStep
 from aiyes.domain.scenario_assertions import evaluate_scenario_assertion
 from aiyes.domain.tree import AccessibilityTree, flatten_nodes
 from aiyes.ports.scenario_executor import ScenarioStepExecutionResult
+
+_NO_PROGRESS_ATTEMPT_LIMIT = 2
 
 
 class ScenarioUseCaseExecutor:
@@ -158,6 +162,7 @@ class ScenarioUseCaseExecutor:
         start = clock.now() if clock is not None else 0.0
         attempts = 0
         scroll_attempts: list[dict[str, Any]] = []
+        unchanged_by_scrollable: dict[str, int] = {}
 
         while True:
             nodes = self._find.execute(
@@ -169,6 +174,8 @@ class ScenarioUseCaseExecutor:
             )
             node_id = _first_node_id(nodes if isinstance(nodes, list) else nodes)
             if node_id:
+                if scroll_attempts:
+                    scroll_attempts[-1]["progress"] = "target_appeared"
                 elapsed = (clock.now() - start) if clock is not None else 0.0
                 output = {
                     "found": True,
@@ -221,6 +228,7 @@ class ScenarioUseCaseExecutor:
                 )
 
             before_tree = _inspect_tree_snapshot(self._inspect, session_id)
+            before_fingerprint = _tree_snapshot_fingerprint(before_tree)
             scrollable = _select_scrollable_candidate(
                 _scrollable_candidates(before_tree, viewport),
                 context_bounds=None,
@@ -246,6 +254,10 @@ class ScenarioUseCaseExecutor:
                 )
                 if native_output is not None and native_output.get("success") is True:
                     after_tree = _inspect_tree_snapshot(self._inspect, session_id)
+                    after_fingerprint = _tree_snapshot_fingerprint(after_tree)
+                    progress = _tree_snapshot_progress(
+                        before_fingerprint, after_fingerprint
+                    )
                     scroll_attempts.append(
                         {
                             "method": "native_scroll",
@@ -253,22 +265,45 @@ class ScenarioUseCaseExecutor:
                             "selected_scrollable_id": selected_scrollable_id,
                             "selected_bounds": selected_bounds,
                             "native_scroll": native_output,
-                            "tree_changed": _tree_snapshot_changed(
-                                before_tree, after_tree
-                            ),
+                            "tree_changed": progress == "changed",
+                            "progress": progress,
+                            "tree_fingerprint_before": before_fingerprint,
+                            "tree_fingerprint_after": after_fingerprint,
                         }
                     )
                     attempts += 1
+                    if _record_no_progress(
+                        unchanged_by_scrollable,
+                        selected_scrollable_id,
+                        progress,
+                    ):
+                        elapsed_no_progress = (
+                            (clock.now() - start) if clock is not None else 0.0
+                        )
+                        return self._scroll_into_view_failure(
+                            step.id,
+                            attempts,
+                            elapsed_no_progress,
+                            direction,
+                            viewport,
+                            "no_progress",
+                            scroll_attempts,
+                        )
                     continue
             self._gesture.swipe(session_id, x1, y1, x2, y2, 300)
             after_tree = _inspect_tree_snapshot(self._inspect, session_id)
+            after_fingerprint = _tree_snapshot_fingerprint(after_tree)
+            progress = _tree_snapshot_progress(before_fingerprint, after_fingerprint)
             attempt = {
                 "method": method,
                 "direction": direction,
                 "coordinates": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
                 "selected_scrollable_id": selected_scrollable_id,
                 "selected_bounds": selected_bounds,
-                "tree_changed": _tree_snapshot_changed(before_tree, after_tree),
+                "tree_changed": progress == "changed",
+                "progress": progress,
+                "tree_fingerprint_before": before_fingerprint,
+                "tree_fingerprint_after": after_fingerprint,
             }
             if scrollable is not None and native_output is not None:
                 attempt["native_scroll"] = native_output
@@ -277,6 +312,23 @@ class ScenarioUseCaseExecutor:
                 )
             scroll_attempts.append(attempt)
             attempts += 1
+            if _record_no_progress(
+                unchanged_by_scrollable,
+                selected_scrollable_id,
+                progress,
+            ):
+                elapsed_no_progress = (
+                    (clock.now() - start) if clock is not None else 0.0
+                )
+                return self._scroll_into_view_failure(
+                    step.id,
+                    attempts,
+                    elapsed_no_progress,
+                    direction,
+                    viewport,
+                    "no_progress",
+                    scroll_attempts,
+                )
 
     def _try_native_scroll(
         self,
@@ -378,6 +430,7 @@ class ScenarioUseCaseExecutor:
             direction=direction,
         )
         output["scroll_attempts"] = scroll_attempts
+        output["failure_class"] = "ambiguous_role_drift"
         self._outputs[step_id] = output
         if len(actionable_candidates) > 1:
             error = "scroll_into_view_role_drift_ambiguous"
@@ -400,6 +453,8 @@ class ScenarioUseCaseExecutor:
         bound_hit: str,
         scroll_attempts: list[dict[str, Any]],
     ) -> ScenarioStepExecutionResult:
+        progress = _final_scroll_progress(scroll_attempts)
+        failure_class = _scroll_failure_class(bound_hit, progress, scroll_attempts)
         output = {
             "found": False,
             "attempts": attempts,
@@ -407,6 +462,8 @@ class ScenarioUseCaseExecutor:
             "direction": direction,
             "viewport": list(viewport),
             "bound_hit": bound_hit,
+            "progress": progress,
+            "failure_class": failure_class,
             "scroll_attempts": scroll_attempts,
         }
         self._outputs[step_id] = output
@@ -414,7 +471,10 @@ class ScenarioUseCaseExecutor:
             step_id=step_id,
             status="failed",
             output=output,
-            error=f"scroll_into_view_target_not_found (bound: {bound_hit}, attempts: {attempts})",
+            error=(
+                "scroll_into_view_target_not_found "
+                f"({failure_class}; bound: {bound_hit}, attempts: {attempts})"
+            ),
         )
 
     def _execute(self, step: ScenarioStep) -> tuple[dict[str, Any], str]:
@@ -1088,9 +1148,108 @@ def _bottom_system_inset(viewport: tuple[int, int]) -> int:
 
 
 def _tree_snapshot_changed(before: Any, after: Any) -> bool:
-    if before is None or after is None:
+    before_fingerprint = _tree_snapshot_fingerprint(before)
+    after_fingerprint = _tree_snapshot_fingerprint(after)
+    if before_fingerprint is None or after_fingerprint is None:
         return False
-    return _to_jsonable(before) != _to_jsonable(after)
+    return before_fingerprint != after_fingerprint
+
+
+def _tree_snapshot_progress(
+    before_fingerprint: Optional[str],
+    after_fingerprint: Optional[str],
+) -> str:
+    if before_fingerprint is None or after_fingerprint is None:
+        return "unknown"
+    if before_fingerprint == after_fingerprint:
+        return "unchanged"
+    return "changed"
+
+
+def _tree_snapshot_fingerprint(tree_snapshot: Any) -> Optional[str]:
+    if tree_snapshot is None:
+        return None
+    nodes = _tree_snapshot_nodes(tree_snapshot)
+    if not nodes:
+        return None
+    entries = []
+    for node in nodes:
+        name = _node_name(node)
+        name_hash = (
+            hashlib.sha256(name.casefold().encode("utf-8")).hexdigest()[:12]
+            if name
+            else ""
+        )
+        entries.append(
+            {
+                "id": _node_id(node),
+                "role": _node_role(node),
+                "name_hash": name_hash,
+                "bounds": list(_node_bounds(node) or ()),
+                "states": sorted(_node_states(node)),
+                "actions": sorted(_node_actions(node)),
+                "scrollable": _node_scrollable(node),
+            }
+        )
+    payload = json.dumps(entries, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _record_no_progress(
+    unchanged_by_scrollable: dict[str, int],
+    selected_scrollable_id: Optional[str],
+    progress: str,
+) -> bool:
+    if not selected_scrollable_id:
+        return False
+    if progress == "unchanged":
+        unchanged_by_scrollable[selected_scrollable_id] = (
+            unchanged_by_scrollable.get(selected_scrollable_id, 0) + 1
+        )
+        return (
+            unchanged_by_scrollable[selected_scrollable_id]
+            >= _NO_PROGRESS_ATTEMPT_LIMIT
+        )
+    if progress in {"changed", "target_appeared"}:
+        unchanged_by_scrollable[selected_scrollable_id] = 0
+    return False
+
+
+def _final_scroll_progress(scroll_attempts: list[dict[str, Any]]) -> str:
+    progress_values = [
+        str(attempt.get("progress", "unknown")) for attempt in scroll_attempts
+    ]
+    if not progress_values:
+        return "unknown"
+    if "target_appeared" in progress_values:
+        return "target_appeared"
+    if "changed" in progress_values:
+        return "changed"
+    if all(progress == "unchanged" for progress in progress_values):
+        return "unchanged"
+    if all(progress == "unknown" for progress in progress_values):
+        return "unknown"
+    return "unknown"
+
+
+def _scroll_failure_class(
+    bound_hit: str,
+    progress: str,
+    scroll_attempts: list[dict[str, Any]],
+) -> str:
+    if bound_hit == "no_progress":
+        return "target_not_found_no_progress"
+    if progress == "unknown":
+        return "target_not_found_progress_unknown"
+    if scroll_attempts and all(
+        attempt.get("selected_scrollable_id") is None for attempt in scroll_attempts
+    ):
+        return "no_scrollable"
+    if progress == "unchanged":
+        return "target_not_found_no_progress"
+    if progress == "changed":
+        return "target_not_found_after_progress"
+    return "target_not_found_after_progress"
 
 
 def _first_node_id(value: Any) -> str:

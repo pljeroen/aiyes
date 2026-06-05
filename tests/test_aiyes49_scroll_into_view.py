@@ -605,18 +605,30 @@ def test_scroll_into_view_without_scrollable_keeps_viewport_swipe() -> None:
 
 
 def test_scroll_into_view_records_required_diagnostics_for_every_scroll() -> None:
-    list_node = _tree_node(
+    list_node_1 = _tree_node(
         "settings_list",
         "list",
         (10, 100, 1000, 1800),
         actions=("scroll",),
     )
+    list_node_2 = _tree_node(
+        "settings_list",
+        "list",
+        (10, 80, 1000, 1800),
+        actions=("scroll",),
+    )
+    list_node_3 = _tree_node(
+        "settings_list",
+        "list",
+        (10, 60, 1000, 1800),
+        actions=("scroll",),
+    )
     inspect = RecordingInspect(
         trees=[
-            _tree(list_node),
-            _tree(list_node),
-            _tree(list_node),
-            _tree(list_node),
+            _tree(list_node_1),
+            _tree(list_node_2),
+            _tree(list_node_2),
+            _tree(list_node_3),
         ]
     )
     find = FakeFindUseCase(results=[[], [], [_node("target")]])
@@ -945,6 +957,168 @@ def test_scroll_into_view_fails_with_diagnostics_after_max_scrolls() -> None:
     assert result.output["found"] is False
     assert result.output["bound_hit"] == "scrolls"
     assert len(gesture.swipe_calls) == 3
+
+
+def test_scroll_into_view_stops_early_after_repeated_unchanged_scrollable() -> None:
+    list_node = _tree_node(
+        "settings_list",
+        "scroll_view",
+        (0, 300, 1080, 1500),
+        states=("scrollable",),
+    )
+    inspect = RecordingInspect(trees=[_tree(list_node)] * 6)
+    find = FakeFindUseCase(results=[[]] * 10)
+    gesture = RecordingGesture()
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        session_repo=FakeSessionRepo(resolution="1080x2400"),
+        clock=StepClock(step=0.01),
+        inspect=inspect,
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="reach",
+            kind="scroll_into_view",
+            parameters={
+                "role": "button",
+                "name_pattern": "Developer",
+                "max_scrolls": 8,
+            },
+        )
+    )
+
+    assert result.status == "failed"
+    assert "target_not_found_no_progress" in result.error
+    assert result.output["failure_class"] == "target_not_found_no_progress"
+    assert result.output["progress"] == "unchanged"
+    assert result.output["attempts"] == 2
+    assert len(gesture.swipe_calls) == 2
+    assert [attempt["progress"] for attempt in result.output["scroll_attempts"]] == [
+        "unchanged",
+        "unchanged",
+    ]
+    for attempt in result.output["scroll_attempts"]:
+        assert isinstance(attempt["tree_fingerprint_before"], str)
+        assert isinstance(attempt["tree_fingerprint_after"], str)
+        assert "Developer" not in json.dumps(attempt)
+
+
+def test_scroll_into_view_changing_tree_until_max_scrolls_reports_after_progress() -> None:
+    inspect = RecordingInspect(
+        trees=[
+            _tree(
+                _tree_node(
+                    f"settings_list_{index}",
+                    "scroll_view",
+                    (0, 300 + index, 1080, 1500),
+                    states=("scrollable",),
+                )
+            )
+            for index in range(8)
+        ]
+    )
+    find = FakeFindUseCase(results=[[]] * 10)
+    gesture = RecordingGesture()
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        session_repo=FakeSessionRepo(resolution="1080x2400"),
+        clock=StepClock(step=0.01),
+        inspect=inspect,
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="reach",
+            kind="scroll_into_view",
+            parameters={
+                "role": "button",
+                "name_pattern": "Developer",
+                "max_scrolls": 3,
+            },
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.output["failure_class"] == "target_not_found_after_progress"
+    assert result.output["progress"] == "changed"
+    assert result.output["attempts"] == 3
+    assert [attempt["progress"] for attempt in result.output["scroll_attempts"]] == [
+        "changed",
+        "changed",
+        "changed",
+    ]
+
+
+def test_scroll_into_view_unknown_progress_preserves_max_scrolls() -> None:
+    inspect = RecordingInspect(trees=[])
+    find = FakeFindUseCase(results=[[]] * 10)
+    gesture = RecordingGesture()
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        session_repo=FakeSessionRepo(),
+        clock=StepClock(step=0.01),
+        inspect=inspect,
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="reach",
+            kind="scroll_into_view",
+            parameters={
+                "role": "button",
+                "name_pattern": "Developer",
+                "max_scrolls": 4,
+            },
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.output["attempts"] == 4
+    assert len(gesture.swipe_calls) == 4
+    assert result.output["progress"] == "unknown"
+    assert result.output["failure_class"] == "target_not_found_progress_unknown"
+    assert all(
+        attempt["progress"] == "unknown"
+        for attempt in result.output["scroll_attempts"]
+    )
+
+
+def test_scroll_into_view_static_tree_without_scrollable_reports_no_scrollable() -> None:
+    static_tree = _tree(_tree_node("root", "frame", (0, 0, 1080, 2400)))
+    inspect = RecordingInspect(trees=[static_tree, static_tree, static_tree, static_tree])
+    find = FakeFindUseCase(results=[[]] * 10)
+    gesture = RecordingGesture()
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        session_repo=FakeSessionRepo(resolution="1080x2400"),
+        clock=StepClock(step=0.01),
+        inspect=inspect,
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="reach",
+            kind="scroll_into_view",
+            parameters={
+                "role": "button",
+                "name_pattern": "Developer",
+                "max_scrolls": 2,
+            },
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.output["progress"] == "unchanged"
+    assert result.output["failure_class"] == "no_scrollable"
+    assert all(
+        attempt["selected_scrollable_id"] is None
+        for attempt in result.output["scroll_attempts"]
+    )
 
 
 # ─── AC-49-05: max_seconds bound ─────────────────────────────────────
