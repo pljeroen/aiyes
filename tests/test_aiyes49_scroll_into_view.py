@@ -17,6 +17,8 @@ import pytest
 
 from aiyes.adapters.scenario_use_case_executor import ScenarioUseCaseExecutor
 from aiyes.domain.scenario import ScenarioStep, validate_scenario_document
+from aiyes.domain.tree import AccessibilityTree, Node
+from aiyes.domain.use_cases.find import FindUseCase
 
 
 @dataclasses.dataclass
@@ -40,8 +42,29 @@ class FakeFindUseCase:
 
     def execute(self, **kwargs: Any) -> Any:
         self.calls.append(dict(kwargs))
+        if kwargs.get("role") == "*":
+            return []
         if self.results:
             return self.results.pop(0)
+        return []
+
+
+@dataclasses.dataclass
+class RoleAwareFakeFindUseCase:
+    """Returns results based on requested role."""
+
+    exact_role: str
+    exact_results: list[list[Any]]
+    wildcard_results: list[list[Any]]
+    calls: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+
+    def execute(self, **kwargs: Any) -> Any:
+        self.calls.append(dict(kwargs))
+        role = kwargs.get("role")
+        if role == self.exact_role and self.exact_results:
+            return self.exact_results.pop(0)
+        if role == "*" and self.wildcard_results:
+            return self.wildcard_results.pop(0)
         return []
 
 
@@ -104,6 +127,21 @@ def _node(node_id: str = "n", bounds: list[int] | None = None) -> dict:
     }
 
 
+def _candidate(
+    node_id: str,
+    role: str,
+    name: str,
+    actions: list[str] | None = None,
+) -> dict:
+    return {
+        "id": node_id,
+        "role": role,
+        "name": name,
+        "bounds": [0, 0, 100, 50],
+        "actions": actions if actions is not None else [],
+    }
+
+
 def _executor(
     *,
     find: Any,
@@ -162,6 +200,189 @@ def test_scroll_into_view_returns_success_when_already_visible() -> None:
     assert result.output["node_id"] == "dev_node"
     assert result.output["attempts"] == 0
     assert gesture.swipe_calls == []
+
+
+def test_scroll_into_view_accepts_unique_actionable_role_drift_candidate() -> None:
+    find = RoleAwareFakeFindUseCase(
+        exact_role="View",
+        exact_results=[[]],
+        wildcard_results=[[_candidate("dev_button", "Button", "Developer")]],
+    )
+    gesture = RecordingGesture()
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        session_repo=FakeSessionRepo(),
+        clock=StepClock(),
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="reach",
+            kind="scroll_into_view",
+            parameters={
+                "role": "View",
+                "name_pattern": "Developer",
+                "max_scrolls": 3,
+            },
+        )
+    )
+
+    assert result.status == "passed"
+    assert result.output["found"] is True
+    assert result.output["node_id"] == "dev_button"
+    assert result.output["role_match"] == "advisory"
+    assert result.output["requested_role"] == "View"
+    assert result.output["actual_role"] == "Button"
+    assert result.output["matched_name"] == "Developer"
+    assert gesture.swipe_calls == []
+    assert [call["role"] for call in find.calls] == ["View", "*"]
+
+
+def test_scroll_into_view_exact_role_match_wins_before_advisory_lookup() -> None:
+    find = RoleAwareFakeFindUseCase(
+        exact_role="View",
+        exact_results=[[_candidate("dev_view", "View", "Developer", ["focus"])]],
+        wildcard_results=[[_candidate("dev_button", "Button", "Developer")]],
+    )
+    gesture = RecordingGesture()
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        session_repo=FakeSessionRepo(),
+        clock=StepClock(),
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="reach",
+            kind="scroll_into_view",
+            parameters={"role": "View", "name_pattern": "Developer"},
+        )
+    )
+
+    assert result.status == "passed"
+    assert result.output["node_id"] == "dev_view"
+    assert result.output["role_match"] == "exact"
+    assert "actual_role" not in result.output
+    assert [call["role"] for call in find.calls] == ["View"]
+
+
+def test_scroll_into_view_ambiguous_role_drift_candidates_fail_before_swipe() -> None:
+    find = RoleAwareFakeFindUseCase(
+        exact_role="View",
+        exact_results=[[]],
+        wildcard_results=[
+            [
+                _candidate("dev_button", "Button", "Developer"),
+                _candidate("dev_link", "Link", "Developer", ["click"]),
+            ]
+        ],
+    )
+    gesture = RecordingGesture()
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        session_repo=FakeSessionRepo(),
+        clock=StepClock(),
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="reach",
+            kind="scroll_into_view",
+            parameters={
+                "role": "View",
+                "name_pattern": "Developer",
+                "max_scrolls": 3,
+            },
+        )
+    )
+
+    assert result.status == "failed"
+    assert "scroll_into_view_role_drift_ambiguous" in result.error
+    assert result.output["requested_role"] == "View"
+    assert result.output["name_pattern"] == "Developer"
+    assert result.output["candidate_count"] == 2
+    assert result.output["observed_roles"] == ["Button", "Link"]
+    assert result.output["candidates"] == [
+        {"node_id": "dev_button", "role": "Button", "name": "Developer"},
+        {"node_id": "dev_link", "role": "Link", "name": "Developer"},
+    ]
+    assert gesture.swipe_calls == []
+
+
+def test_scroll_into_view_role_drift_without_actionable_candidate_fails_with_diagnostics() -> None:
+    find = RoleAwareFakeFindUseCase(
+        exact_role="View",
+        exact_results=[[]],
+        wildcard_results=[[_candidate("dev_text", "TextView", "Developer")]],
+    )
+    gesture = RecordingGesture()
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        session_repo=FakeSessionRepo(),
+        clock=StepClock(),
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="reach",
+            kind="scroll_into_view",
+            parameters={
+                "role": "View",
+                "name_pattern": "Developer",
+                "max_scrolls": 3,
+            },
+        )
+    )
+
+    assert result.status == "failed"
+    assert "scroll_into_view_role_drift_no_actionable_candidate" in result.error
+    assert result.output["requested_role"] == "View"
+    assert result.output["name_pattern"] == "Developer"
+    assert result.output["candidate_count"] == 0
+    assert result.output["observed_roles"] == ["TextView"]
+    assert gesture.swipe_calls == []
+
+
+def test_find_use_case_role_view_does_not_return_button() -> None:
+    class StaticTree:
+        last_registry = None
+
+        def get_tree(self, session: Any) -> AccessibilityTree:
+            return AccessibilityTree(
+                roots=(
+                    Node(
+                        id="dev_button",
+                        role="Button",
+                        name="Developer",
+                        bounds=(0, 0, 100, 50),
+                        states=("enabled",),
+                        actions=("click",),
+                    ),
+                )
+            )
+
+    class RecordingTreeStore:
+        def save_tree(
+            self,
+            session_id: str,
+            tree: AccessibilityTree,
+            registry: Any,
+        ) -> None:
+            return None
+
+    uc = FindUseCase(
+        tree=StaticTree(),
+        session_repo=FakeSessionRepo(),
+        tree_store=RecordingTreeStore(),
+    )
+
+    result = uc.execute(session_id="s1", role="View", name_pattern="Developer")
+
+    assert result == []
 
 
 # ─── AC-49-03: target appears after K-1 scrolls ───────────────────────

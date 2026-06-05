@@ -173,6 +173,7 @@ class ScenarioUseCaseExecutor:
                     "attempts": attempts,
                     "elapsed": elapsed,
                     "direction": direction,
+                    "role_match": "exact",
                 }
                 self._outputs[step.id] = output
                 return ScenarioStepExecutionResult(
@@ -180,6 +181,19 @@ class ScenarioUseCaseExecutor:
                 )
 
             elapsed_now = (clock.now() - start) if clock is not None else 0.0
+            advisory_result = self._resolve_scroll_into_view_role_drift(
+                step_id=step.id,
+                session_id=session_id,
+                requested_role=role,
+                name_pattern=name_pattern,
+                state=state,
+                attempts=attempts,
+                elapsed=elapsed_now,
+                direction=direction,
+            )
+            if advisory_result is not None:
+                return advisory_result
+
             if attempts >= max_scrolls:
                 return self._scroll_into_view_failure(
                     step.id, attempts, elapsed_now, direction, viewport, "scrolls"
@@ -191,6 +205,77 @@ class ScenarioUseCaseExecutor:
 
             self._gesture.swipe(session_id, x1, y1, x2, y2, 300)
             attempts += 1
+
+    def _resolve_scroll_into_view_role_drift(
+        self,
+        *,
+        step_id: str,
+        session_id: str,
+        requested_role: str,
+        name_pattern: Any,
+        state: Any,
+        attempts: int,
+        elapsed: float,
+        direction: str,
+    ) -> Optional[ScenarioStepExecutionResult]:
+        if requested_role == "*" or not _non_empty_pattern(name_pattern):
+            return None
+
+        wildcard_nodes = self._find.execute(
+            session_id=session_id,
+            role="*",
+            name_pattern=name_pattern,
+            state=state,
+            no_prune=False,
+        )
+        candidates = _candidate_nodes(wildcard_nodes)
+        if not candidates:
+            return None
+
+        actionable_candidates = [
+            node
+            for node in candidates
+            if _role_drift_compatible(node, requested_role)
+            and _scroll_target_actionable(node)
+        ]
+        if len(actionable_candidates) == 1:
+            node = actionable_candidates[0]
+            output = {
+                "found": True,
+                "node_id": _node_id(node),
+                "attempts": attempts,
+                "elapsed": elapsed,
+                "direction": direction,
+                "role_match": "advisory",
+                "requested_role": requested_role,
+                "actual_role": _node_role(node),
+                "matched_name": _node_name(node),
+            }
+            self._outputs[step_id] = output
+            return ScenarioStepExecutionResult(
+                step_id=step_id, status="passed", output=output, error=""
+            )
+
+        output = _role_drift_failure_output(
+            candidates=candidates,
+            actionable_candidates=actionable_candidates,
+            requested_role=requested_role,
+            name_pattern=str(name_pattern),
+            attempts=attempts,
+            elapsed=elapsed,
+            direction=direction,
+        )
+        self._outputs[step_id] = output
+        if len(actionable_candidates) > 1:
+            error = "scroll_into_view_role_drift_ambiguous"
+        else:
+            error = "scroll_into_view_role_drift_no_actionable_candidate"
+        return ScenarioStepExecutionResult(
+            step_id=step_id,
+            status="failed",
+            output=output,
+            error=error,
+        )
 
     def _scroll_into_view_failure(
         self,
@@ -578,6 +663,91 @@ def _get_attr(value: Any, name: str) -> Optional[Any]:
     if isinstance(value, Mapping):
         return value.get(name)
     return getattr(value, name, None)
+
+
+def _non_empty_pattern(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _candidate_nodes(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, Mapping):
+        nodes = value.get("nodes")
+        if isinstance(nodes, Sequence) and not isinstance(nodes, (str, bytes)):
+            return list(nodes)
+        return [value]
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return list(value)
+    return [value]
+
+
+def _node_role(value: Any) -> str:
+    if isinstance(value, Mapping):
+        raw = value.get("role", "")
+    else:
+        raw = getattr(value, "role", "")
+    return str(raw) if raw else ""
+
+
+def _node_name(value: Any) -> str:
+    if isinstance(value, Mapping):
+        raw = value.get("name", "")
+    else:
+        raw = getattr(value, "name", "")
+    return str(raw) if raw else ""
+
+
+def _node_actions(value: Any) -> tuple[str, ...]:
+    if isinstance(value, Mapping):
+        raw = value.get("actions", ())
+    else:
+        raw = getattr(value, "actions", ())
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+        return ()
+    return tuple(str(action) for action in raw)
+
+
+def _role_drift_compatible(value: Any, requested_role: str) -> bool:
+    return _node_role(value) != requested_role
+
+
+def _scroll_target_actionable(value: Any) -> bool:
+    if _node_role(value).lower() == "button":
+        return True
+    actionable = {"click", "tap", "press", "activate", "scroll", "focus", "long_click"}
+    return any(action.lower() in actionable for action in _node_actions(value))
+
+
+def _role_drift_failure_output(
+    *,
+    candidates: list[Any],
+    actionable_candidates: list[Any],
+    requested_role: str,
+    name_pattern: str,
+    attempts: int,
+    elapsed: float,
+    direction: str,
+) -> dict[str, Any]:
+    return {
+        "found": False,
+        "attempts": attempts,
+        "elapsed": elapsed,
+        "direction": direction,
+        "role_match": "advisory",
+        "requested_role": requested_role,
+        "name_pattern": name_pattern,
+        "candidate_count": len(actionable_candidates),
+        "observed_roles": sorted({_node_role(node) for node in candidates}),
+        "candidates": [
+            {
+                "node_id": _node_id(node),
+                "role": _node_role(node),
+                "name": _node_name(node),
+            }
+            for node in actionable_candidates
+        ],
+    }
 
 
 def _first_node_id(value: Any) -> str:
