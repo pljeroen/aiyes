@@ -103,6 +103,20 @@ class RecordingGesture:
         raise AssertionError("two_finger_scroll not expected")
 
 
+@dataclasses.dataclass
+class RecordingInspect:
+    """Returns successive inspect snapshots."""
+
+    trees: list[Any]
+    calls: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+
+    def execute(self, **kwargs: Any) -> Any:
+        self.calls.append(dict(kwargs))
+        if self.trees:
+            return SimpleNamespace(tree=self.trees.pop(0))
+        return SimpleNamespace(tree=None)
+
+
 class FakeSessionRepo:
     """Returns a session with a known resolution."""
 
@@ -148,13 +162,14 @@ def _executor(
     gesture: Any,
     session_repo: Any,
     clock: Any,
+    inspect: Any | None = None,
 ) -> ScenarioUseCaseExecutor:
     start = SimpleNamespace(
         execute=lambda **kwargs: SimpleNamespace(session_id="s1", backend="android")
     )
     executor = ScenarioUseCaseExecutor(
         session_start=start,
-        inspect=SimpleNamespace(execute=lambda **kw: SimpleNamespace()),
+        inspect=inspect or SimpleNamespace(execute=lambda **kw: SimpleNamespace()),
         find=find,
         action=SimpleNamespace(execute=lambda **kw: SimpleNamespace(status="ok")),
         type_text=SimpleNamespace(execute=lambda **kw: SimpleNamespace(status="ok")),
@@ -172,6 +187,30 @@ def _executor(
         )
     )
     return executor
+
+
+def _tree(*nodes: Node) -> AccessibilityTree:
+    return AccessibilityTree(roots=nodes)
+
+
+def _tree_node(
+    node_id: str,
+    role: str,
+    bounds: tuple[int, int, int, int],
+    *,
+    actions: tuple[str, ...] = (),
+    states: tuple[str, ...] = (),
+    children: tuple[Node, ...] = (),
+) -> Node:
+    return Node(
+        id=node_id,
+        role=role,
+        name=node_id,
+        bounds=bounds,
+        states=states,
+        actions=actions,
+        children=children,
+    )
 
 
 # ─── AC-49-02: target found on first attempt ──────────────────────────
@@ -413,6 +452,227 @@ def test_scroll_into_view_succeeds_after_intermediate_scrolls() -> None:
     assert result.status == "passed"
     assert result.output["attempts"] == 2
     assert len(gesture.swipe_calls) == 2
+
+
+def test_scroll_into_view_uses_scrollable_region_above_bottom_nav() -> None:
+    list_node = _tree_node(
+        "settings_list",
+        "list",
+        (0, 200, 1080, 1900),
+        actions=("scroll",),
+    )
+    bottom_nav = _tree_node("bottom_nav", "navigation_bar", (0, 2200, 1080, 200))
+    inspect = RecordingInspect(trees=[_tree(list_node, bottom_nav), _tree(list_node)])
+    find = FakeFindUseCase(results=[[], [_node("target")]])
+    gesture = RecordingGesture()
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        session_repo=FakeSessionRepo(resolution="1080x2400"),
+        clock=StepClock(step=0.01),
+        inspect=inspect,
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="reach",
+            kind="scroll_into_view",
+            parameters={
+                "role": "button",
+                "name_pattern": "Developer",
+                "direction": "down",
+                "max_scrolls": 3,
+            },
+        )
+    )
+
+    assert result.status == "passed"
+    call = gesture.swipe_calls[0]
+    assert call["x1"] == call["x2"] == 540
+    assert 200 < call["y2"] < call["y1"] < 2100
+    assert call["y1"] < 2200
+    attempt = result.output["scroll_attempts"][0]
+    assert attempt["method"] == "scrollable_region_swipe"
+    assert attempt["direction"] == "down"
+    assert attempt["selected_scrollable_id"] == "settings_list"
+    assert attempt["selected_bounds"] == [0, 200, 1080, 1900]
+    assert attempt["coordinates"] == {
+        "x1": call["x1"],
+        "y1": call["y1"],
+        "x2": call["x2"],
+        "y2": call["y2"],
+    }
+    assert attempt["tree_changed"] is True
+
+
+def test_scroll_into_view_without_scrollable_keeps_viewport_swipe() -> None:
+    inspect = RecordingInspect(trees=[_tree(_tree_node("root", "frame", (0, 0, 1080, 2400)))])
+    find = FakeFindUseCase(results=[[]] * 5)
+    gesture = RecordingGesture()
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        session_repo=FakeSessionRepo(resolution="1080x2400"),
+        clock=StepClock(step=0.01),
+        inspect=inspect,
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="reach",
+            kind="scroll_into_view",
+            parameters={
+                "role": "button",
+                "name_pattern": "Developer",
+                "direction": "down",
+                "max_scrolls": 1,
+            },
+        )
+    )
+
+    assert result.status == "failed"
+    assert gesture.swipe_calls == [
+        {
+            "session_id": "s1",
+            "x1": 540,
+            "y1": 2000,
+            "x2": 540,
+            "y2": 400,
+            "duration_ms": 300,
+        }
+    ]
+    assert result.output["scroll_attempts"][0]["method"] == "viewport_swipe"
+    assert result.output["scroll_attempts"][0]["selected_scrollable_id"] is None
+    assert result.output["scroll_attempts"][0]["selected_bounds"] is None
+
+
+def test_scroll_into_view_records_required_diagnostics_for_every_scroll() -> None:
+    list_node = _tree_node(
+        "settings_list",
+        "list",
+        (10, 100, 1000, 1800),
+        actions=("scroll",),
+    )
+    inspect = RecordingInspect(
+        trees=[
+            _tree(list_node),
+            _tree(list_node),
+            _tree(list_node),
+            _tree(list_node),
+        ]
+    )
+    find = FakeFindUseCase(results=[[], [], [_node("target")]])
+    gesture = RecordingGesture()
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        session_repo=FakeSessionRepo(resolution="1080x2400"),
+        clock=StepClock(step=0.01),
+        inspect=inspect,
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="reach",
+            kind="scroll_into_view",
+            parameters={
+                "role": "button",
+                "name_pattern": "Developer",
+                "max_scrolls": 3,
+            },
+        )
+    )
+
+    assert result.status == "passed"
+    assert len(result.output["scroll_attempts"]) == 2
+    for attempt in result.output["scroll_attempts"]:
+        assert set(attempt) >= {
+            "method",
+            "direction",
+            "coordinates",
+            "selected_scrollable_id",
+            "selected_bounds",
+            "tree_changed",
+        }
+        assert set(attempt["coordinates"]) == {"x1", "y1", "x2", "y2"}
+        assert isinstance(attempt["tree_changed"], bool)
+
+
+def test_scroll_into_view_tree_changed_includes_bounds_changes() -> None:
+    before_list = _tree_node(
+        "settings_list",
+        "list",
+        (10, 100, 1000, 1800),
+        actions=("scroll",),
+    )
+    after_list = _tree_node(
+        "settings_list",
+        "list",
+        (10, 80, 1000, 1800),
+        actions=("scroll",),
+    )
+    inspect = RecordingInspect(trees=[_tree(before_list), _tree(after_list)])
+    find = FakeFindUseCase(results=[[], [_node("target")]])
+    gesture = RecordingGesture()
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        session_repo=FakeSessionRepo(resolution="1080x2400"),
+        clock=StepClock(step=0.01),
+        inspect=inspect,
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="reach",
+            kind="scroll_into_view",
+            parameters={
+                "role": "button",
+                "name_pattern": "Developer",
+                "max_scrolls": 3,
+            },
+        )
+    )
+
+    assert result.status == "passed"
+    assert result.output["scroll_attempts"][0]["tree_changed"] is True
+
+
+def test_scroll_into_view_region_swipe_preserves_down_view_direction() -> None:
+    list_node = _tree_node(
+        "settings_list",
+        "scroll_view",
+        (0, 300, 1080, 1500),
+        states=("scrollable",),
+    )
+    inspect = RecordingInspect(trees=[_tree(list_node), _tree(list_node)])
+    find = FakeFindUseCase(results=[[], [_node("target")]])
+    gesture = RecordingGesture()
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        session_repo=FakeSessionRepo(resolution="1080x2400"),
+        clock=StepClock(step=0.01),
+        inspect=inspect,
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="reach",
+            kind="scroll_into_view",
+            parameters={
+                "role": "button",
+                "name_pattern": "Developer",
+                "direction": "down",
+                "max_scrolls": 3,
+            },
+        )
+    )
+
+    assert result.status == "passed"
+    call = gesture.swipe_calls[0]
+    assert call["y1"] > call["y2"]
+    assert result.output["scroll_attempts"][0]["direction"] == "down"
 
 
 # ─── AC-49-04: failure when max_scrolls reached ───────────────────────

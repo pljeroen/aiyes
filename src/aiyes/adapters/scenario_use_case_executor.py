@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 from aiyes.domain.scenario import _VALID_DIRECTIONS, ScenarioStep
 from aiyes.domain.scenario_assertions import evaluate_scenario_assertion
+from aiyes.domain.tree import AccessibilityTree, flatten_nodes
 from aiyes.ports.scenario_executor import ScenarioStepExecutionResult
 
 
@@ -150,11 +151,11 @@ class ScenarioUseCaseExecutor:
         viewport = _parse_viewport(
             self._session_repo, session_id, _cache=self._viewport_cache
         )
-        x1, y1, x2, y2 = _swipe_coords_for_direction(direction, viewport)
 
         clock = self._clock
         start = clock.now() if clock is not None else 0.0
         attempts = 0
+        scroll_attempts: list[dict[str, Any]] = []
 
         while True:
             nodes = self._find.execute(
@@ -174,6 +175,7 @@ class ScenarioUseCaseExecutor:
                     "elapsed": elapsed,
                     "direction": direction,
                     "role_match": "exact",
+                    "scroll_attempts": scroll_attempts,
                 }
                 self._outputs[step.id] = output
                 return ScenarioStepExecutionResult(
@@ -190,20 +192,61 @@ class ScenarioUseCaseExecutor:
                 attempts=attempts,
                 elapsed=elapsed_now,
                 direction=direction,
+                scroll_attempts=scroll_attempts,
             )
             if advisory_result is not None:
                 return advisory_result
 
             if attempts >= max_scrolls:
                 return self._scroll_into_view_failure(
-                    step.id, attempts, elapsed_now, direction, viewport, "scrolls"
+                    step.id,
+                    attempts,
+                    elapsed_now,
+                    direction,
+                    viewport,
+                    "scrolls",
+                    scroll_attempts,
                 )
             if elapsed_now >= max_seconds:
                 return self._scroll_into_view_failure(
-                    step.id, attempts, elapsed_now, direction, viewport, "seconds"
+                    step.id,
+                    attempts,
+                    elapsed_now,
+                    direction,
+                    viewport,
+                    "seconds",
+                    scroll_attempts,
                 )
 
+            before_tree = _inspect_tree_snapshot(self._inspect, session_id)
+            scrollable = _select_scrollable_candidate(
+                _scrollable_candidates(before_tree, viewport),
+                context_bounds=None,
+            )
+            if scrollable is None:
+                x1, y1, x2, y2 = _swipe_coords_for_direction(direction, viewport)
+                method = "viewport_swipe"
+                selected_scrollable_id = None
+                selected_bounds = None
+            else:
+                x1, y1, x2, y2 = _swipe_coords_in_bounds(
+                    direction, scrollable.bounds, viewport
+                )
+                method = "scrollable_region_swipe"
+                selected_scrollable_id = scrollable.node_id
+                selected_bounds = list(scrollable.bounds)
             self._gesture.swipe(session_id, x1, y1, x2, y2, 300)
+            after_tree = _inspect_tree_snapshot(self._inspect, session_id)
+            scroll_attempts.append(
+                {
+                    "method": method,
+                    "direction": direction,
+                    "coordinates": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+                    "selected_scrollable_id": selected_scrollable_id,
+                    "selected_bounds": selected_bounds,
+                    "tree_changed": _tree_snapshot_changed(before_tree, after_tree),
+                }
+            )
             attempts += 1
 
     def _resolve_scroll_into_view_role_drift(
@@ -217,6 +260,7 @@ class ScenarioUseCaseExecutor:
         attempts: int,
         elapsed: float,
         direction: str,
+        scroll_attempts: list[dict[str, Any]],
     ) -> Optional[ScenarioStepExecutionResult]:
         if requested_role == "*" or not _non_empty_pattern(name_pattern):
             return None
@@ -250,6 +294,7 @@ class ScenarioUseCaseExecutor:
                 "requested_role": requested_role,
                 "actual_role": _node_role(node),
                 "matched_name": _node_name(node),
+                "scroll_attempts": scroll_attempts,
             }
             self._outputs[step_id] = output
             return ScenarioStepExecutionResult(
@@ -265,6 +310,7 @@ class ScenarioUseCaseExecutor:
             elapsed=elapsed,
             direction=direction,
         )
+        output["scroll_attempts"] = scroll_attempts
         self._outputs[step_id] = output
         if len(actionable_candidates) > 1:
             error = "scroll_into_view_role_drift_ambiguous"
@@ -285,6 +331,7 @@ class ScenarioUseCaseExecutor:
         direction: str,
         viewport: tuple[int, int],
         bound_hit: str,
+        scroll_attempts: list[dict[str, Any]],
     ) -> ScenarioStepExecutionResult:
         output = {
             "found": False,
@@ -293,6 +340,7 @@ class ScenarioUseCaseExecutor:
             "direction": direction,
             "viewport": list(viewport),
             "bound_hit": bound_hit,
+            "scroll_attempts": scroll_attempts,
         }
         self._outputs[step_id] = output
         return ScenarioStepExecutionResult(
@@ -570,6 +618,13 @@ class ScenarioUseCaseExecutor:
         return node_id
 
 
+@dataclasses.dataclass(frozen=True)
+class _ScrollableCandidate:
+    node_id: str
+    bounds: tuple[int, int, int, int]
+    area: int
+
+
 def _start_kwargs(params: Mapping[str, Any]) -> dict[str, Any]:
     command = params.get("command", "")
     backend = str(params.get("backend", "linux"))
@@ -748,6 +803,213 @@ def _role_drift_failure_output(
             for node in actionable_candidates
         ],
     }
+
+
+def _inspect_tree_snapshot(inspect: Any, session_id: str) -> Any:
+    if inspect is None:
+        return None
+    try:
+        result = inspect.execute(
+            session_id=session_id,
+            no_screenshot=True,
+            no_tree=False,
+            tree_depth=None,
+            no_prune=True,
+            screenshot_base64=False,
+            focus_window=None,
+        )
+    except Exception:
+        return None
+    if isinstance(result, Mapping):
+        return result.get("tree")
+    return getattr(result, "tree", None)
+
+
+def _scrollable_candidates(
+    tree_snapshot: Any, viewport: tuple[int, int]
+) -> list[_ScrollableCandidate]:
+    candidates: list[_ScrollableCandidate] = []
+    for node in _tree_snapshot_nodes(tree_snapshot):
+        bounds = _node_bounds(node)
+        if bounds is None or not _visible_bounds(bounds, viewport):
+            continue
+        if not _node_scrollable(node):
+            continue
+        node_id = _node_id(node)
+        if not node_id:
+            continue
+        _, _, width, height = bounds
+        candidates.append(
+            _ScrollableCandidate(node_id=node_id, bounds=bounds, area=width * height)
+        )
+    return candidates
+
+
+def _tree_snapshot_nodes(tree_snapshot: Any) -> list[Any]:
+    if tree_snapshot is None:
+        return []
+    if isinstance(tree_snapshot, AccessibilityTree):
+        return list(flatten_nodes(tree_snapshot.roots))
+    if isinstance(tree_snapshot, Mapping):
+        roots = tree_snapshot.get("roots", tree_snapshot.get("tree"))
+        if isinstance(roots, Sequence) and not isinstance(roots, (str, bytes)):
+            return _walk_tree_nodes(roots)
+        if roots is not None:
+            return _walk_tree_nodes([roots])
+        return _walk_tree_nodes([tree_snapshot])
+    if isinstance(tree_snapshot, Sequence) and not isinstance(tree_snapshot, (str, bytes)):
+        return _walk_tree_nodes(tree_snapshot)
+    roots = getattr(tree_snapshot, "roots", None)
+    if isinstance(roots, Sequence) and not isinstance(roots, (str, bytes)):
+        return _walk_tree_nodes(roots)
+    return _walk_tree_nodes([tree_snapshot])
+
+
+def _walk_tree_nodes(nodes: Sequence[Any]) -> list[Any]:
+    flattened: list[Any] = []
+    for node in nodes:
+        flattened.append(node)
+        if isinstance(node, Mapping):
+            children = node.get("children", ())
+        else:
+            children = getattr(node, "children", ())
+        if isinstance(children, Sequence) and not isinstance(children, (str, bytes)):
+            flattened.extend(_walk_tree_nodes(children))
+    return flattened
+
+
+def _node_scrollable(value: Any) -> bool:
+    role = _node_role(value).lower()
+    if "scroll" in role or role in {"list", "listview", "recyclerview"}:
+        return True
+    states = _node_states(value)
+    if "scrollable" in states:
+        return True
+    if isinstance(value, Mapping):
+        raw = value.get("scrollable")
+        if raw is True or (isinstance(raw, str) and raw.lower() == "true"):
+            return True
+    return any(action.lower() == "scroll" for action in _node_actions(value))
+
+
+def _node_states(value: Any) -> tuple[str, ...]:
+    if isinstance(value, Mapping):
+        raw = value.get("states", ())
+    else:
+        raw = getattr(value, "states", ())
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+        return ()
+    return tuple(str(state).lower() for state in raw)
+
+
+def _visible_bounds(bounds: tuple[int, int, int, int], viewport: tuple[int, int]) -> bool:
+    x, y, width, height = bounds
+    if width <= 0 or height <= 0:
+        return False
+    viewport_width, viewport_height = viewport
+    if x >= viewport_width or y >= viewport_height:
+        return False
+    if x + width <= 0 or y + height <= 0:
+        return False
+    return True
+
+
+def _select_scrollable_candidate(
+    candidates: list[_ScrollableCandidate],
+    context_bounds: Optional[tuple[int, int, int, int]],
+) -> Optional[_ScrollableCandidate]:
+    if not candidates:
+        return None
+    if context_bounds is not None:
+        contextual = [
+            candidate
+            for candidate in candidates
+            if _bounds_contains(candidate.bounds, context_bounds)
+            or _bounds_overlap_ratio(candidate.bounds, context_bounds) >= 0.5
+        ]
+        if contextual:
+            return min(contextual, key=lambda candidate: candidate.area)
+    return max(candidates, key=lambda candidate: candidate.area)
+
+
+def _bounds_contains(
+    outer: tuple[int, int, int, int], inner: tuple[int, int, int, int]
+) -> bool:
+    outer_x, outer_y, outer_w, outer_h = outer
+    inner_x, inner_y, inner_w, inner_h = inner
+    return (
+        outer_x <= inner_x
+        and outer_y <= inner_y
+        and outer_x + outer_w >= inner_x + inner_w
+        and outer_y + outer_h >= inner_y + inner_h
+    )
+
+
+def _bounds_overlap_ratio(
+    first: tuple[int, int, int, int], second: tuple[int, int, int, int]
+) -> float:
+    first_x, first_y, first_w, first_h = first
+    second_x, second_y, second_w, second_h = second
+    overlap_w = max(
+        0,
+        min(first_x + first_w, second_x + second_w) - max(first_x, second_x),
+    )
+    overlap_h = max(
+        0,
+        min(first_y + first_h, second_y + second_h) - max(first_y, second_y),
+    )
+    second_area = second_w * second_h
+    if second_area <= 0:
+        return 0.0
+    return (overlap_w * overlap_h) / second_area
+
+
+def _swipe_coords_in_bounds(
+    direction: str,
+    bounds: tuple[int, int, int, int],
+    viewport: tuple[int, int],
+) -> tuple[int, int, int, int]:
+    x, y, width, height = bounds
+    left = max(0, x)
+    top = max(0, y)
+    right = min(viewport[0], x + width)
+    bottom = min(viewport[1] - _bottom_system_inset(viewport), y + height)
+
+    horizontal_margin = _edge_margin(right - left)
+    vertical_margin = _edge_margin(bottom - top)
+    safe_left = min(right, left + horizontal_margin)
+    safe_right = max(left, right - horizontal_margin)
+    safe_top = min(bottom, top + vertical_margin)
+    safe_bottom = max(top, bottom - vertical_margin)
+
+    cx = (safe_left + safe_right) // 2
+    cy = (safe_top + safe_bottom) // 2
+    if direction == "down":
+        return (cx, safe_bottom, cx, safe_top)
+    if direction == "up":
+        return (cx, safe_top, cx, safe_bottom)
+    if direction == "left":
+        return (safe_left, cy, safe_right, cy)
+    if direction == "right":
+        return (safe_right, cy, safe_left, cy)
+    return (cx, safe_bottom, cx, safe_top)
+
+
+def _edge_margin(length: int) -> int:
+    if length <= 2:
+        return 0
+    return min(96, max(16, length // 12))
+
+
+def _bottom_system_inset(viewport: tuple[int, int]) -> int:
+    _, height = viewport
+    return min(240, max(96, height // 20))
+
+
+def _tree_snapshot_changed(before: Any, after: Any) -> bool:
+    if before is None or after is None:
+        return False
+    return _to_jsonable(before) != _to_jsonable(after)
 
 
 def _first_node_id(value: Any) -> str:
