@@ -75,6 +75,7 @@ from aiyes.adapters.android_capability_probe_adapter import (
     AndroidCapabilityProbeAdapter,
 )
 from aiyes.adapters.android_input_adapter import AdbInputAdapter
+from aiyes.adapters.android_native_scroll_adapter import AndroidNativeScrollAdapter
 from aiyes.adapters.android_screenshot_adapter import AdbScreenshotAdapter
 from aiyes.adapters.android_tree_adapter import AndroidUiAutomatorTreeAdapter
 from aiyes.adapters.android_reactive_wait_adapter import AndroidReactiveWaitObserver
@@ -143,6 +144,7 @@ _session_cleanup = FileSessionCleanup()
 _crop = ImageMagickCropAdapter()
 _android_lifecycle = AdbAppLifecycleAdapter()
 _android_capability_probe = AndroidCapabilityProbeAdapter()
+_android_native_scroll = AndroidNativeScrollAdapter()
 _scenario_executor = ScenarioDryRunExecutor()
 _scenario_prerequisite_checker = SystemScenarioPrerequisiteChecker()
 
@@ -629,6 +631,7 @@ _scenario_real_executor = ScenarioUseCaseExecutor(
     key=key_uc,
     mouse=mouse_uc,
     gesture=gesture_uc,
+    native_scroll=_android_native_scroll,
     session_repo=_session_repo,
     clock=_clock,
 )

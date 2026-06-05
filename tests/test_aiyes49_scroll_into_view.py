@@ -73,6 +73,7 @@ class RecordingGesture:
     """Records swipe calls."""
 
     swipe_calls: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+    events: list[str] = dataclasses.field(default_factory=list)
 
     def swipe(
         self,
@@ -83,6 +84,7 @@ class RecordingGesture:
         y2: int,
         duration_ms: int = 300,
     ) -> Any:
+        self.events.append("region_swipe")
         self.swipe_calls.append(
             {
                 "session_id": session_id,
@@ -104,6 +106,38 @@ class RecordingGesture:
 
 
 @dataclasses.dataclass
+class RecordingNativeScroll:
+    """Records semantic native scroll calls."""
+
+    results: list[Any]
+    calls: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+    events: list[str] = dataclasses.field(default_factory=list)
+
+    def scroll(
+        self,
+        session: Any,
+        node_id: str,
+        direction: str,
+        *,
+        stable_id: str = "",
+        bounds: tuple[int, int, int, int] | None = None,
+    ) -> Any:
+        self.calls.append(
+            {
+                "session": session,
+                "node_id": node_id,
+                "direction": direction,
+                "stable_id": stable_id,
+                "bounds": bounds,
+            }
+        )
+        self.events.append("native_scroll")
+        if self.results:
+            return self.results.pop(0)
+        raise AssertionError("unexpected native scroll call")
+
+
+@dataclasses.dataclass
 class RecordingInspect:
     """Returns successive inspect snapshots."""
 
@@ -120,15 +154,22 @@ class RecordingInspect:
 class FakeSessionRepo:
     """Returns a session with a known resolution."""
 
-    def __init__(self, resolution: str = "1080x1920", backend: str = "android") -> None:
+    def __init__(
+        self,
+        resolution: str = "1080x1920",
+        backend: str = "android",
+        device_serial: str = "",
+    ) -> None:
         self._resolution = resolution
         self._backend = backend
+        self._device_serial = device_serial
 
     def load(self, session_id: str) -> Any:
         return SimpleNamespace(
             session_id=session_id,
             resolution=self._resolution,
             backend=self._backend,
+            device_serial=self._device_serial,
         )
 
 
@@ -163,6 +204,7 @@ def _executor(
     session_repo: Any,
     clock: Any,
     inspect: Any | None = None,
+    native_scroll: Any | None = None,
 ) -> ScenarioUseCaseExecutor:
     start = SimpleNamespace(
         execute=lambda **kwargs: SimpleNamespace(session_id="s1", backend="android")
@@ -176,6 +218,7 @@ def _executor(
         screenshot=SimpleNamespace(execute=lambda **kw: SimpleNamespace()),
         session_stop=SimpleNamespace(execute=lambda **kw: SimpleNamespace()),
         gesture=gesture,
+        native_scroll=native_scroll,
         session_repo=session_repo,
         clock=clock,
     )
@@ -210,6 +253,21 @@ def _tree_node(
         states=states,
         actions=actions,
         children=children,
+    )
+
+
+def _native_result(success: bool, fallback_reason: str | None = None) -> Any:
+    return SimpleNamespace(
+        success=success,
+        method="android_accessibility_helper",
+        requested_action="ACTION_SCROLL_FORWARD",
+        action_id=4096,
+        node_id="settings_list",
+        direction="down",
+        returncode=0 if success else 1,
+        stdout_summary="ok" if success else "",
+        stderr_summary="" if success else "denied",
+        fallback_reason=fallback_reason,
     )
 
 
@@ -673,6 +731,186 @@ def test_scroll_into_view_region_swipe_preserves_down_view_direction() -> None:
     call = gesture.swipe_calls[0]
     assert call["y1"] > call["y2"]
     assert result.output["scroll_attempts"][0]["direction"] == "down"
+
+
+def test_scroll_into_view_attempts_native_scroll_before_region_swipe_on_android() -> None:
+    events: list[str] = []
+    list_node = _tree_node(
+        "settings_list",
+        "scroll_view",
+        (0, 300, 1080, 1500),
+        states=("scrollable",),
+    )
+    inspect = RecordingInspect(trees=[_tree(list_node), _tree(list_node)])
+    find = FakeFindUseCase(results=[[], [_node("target")]])
+    gesture = RecordingGesture(events=events)
+    native_scroll = RecordingNativeScroll(
+        results=[_native_result(False, "native_scroll_helper_failed")],
+        events=events,
+    )
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        native_scroll=native_scroll,
+        session_repo=FakeSessionRepo(
+            resolution="1080x2400", device_serial="emulator-5554"
+        ),
+        clock=StepClock(step=0.01),
+        inspect=inspect,
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="reach",
+            kind="scroll_into_view",
+            parameters={
+                "role": "button",
+                "name_pattern": "Developer",
+                "direction": "down",
+                "max_scrolls": 3,
+            },
+        )
+    )
+
+    assert result.status == "passed"
+    assert events == ["native_scroll", "region_swipe"]
+    assert native_scroll.calls[0]["node_id"] == "settings_list"
+    assert native_scroll.calls[0]["direction"] == "down"
+    assert native_scroll.calls[0]["stable_id"] == ""
+    assert native_scroll.calls[0]["bounds"] == (0, 300, 1080, 1500)
+    assert native_scroll.calls[0]["session"].device_serial == "emulator-5554"
+    attempt = result.output["scroll_attempts"][0]
+    assert attempt["method"] == "scrollable_region_swipe"
+    assert attempt["native_scroll"]["requested_action"] == "ACTION_SCROLL_FORWARD"
+    assert attempt["fallback_reason"] == "native_scroll_helper_failed"
+
+
+def test_scroll_into_view_native_success_suppresses_region_swipe() -> None:
+    list_node = _tree_node(
+        "settings_list",
+        "scroll_view",
+        (0, 300, 1080, 1500),
+        states=("scrollable",),
+    )
+    inspect = RecordingInspect(trees=[_tree(list_node), _tree(list_node)])
+    find = FakeFindUseCase(results=[[], [_node("target")]])
+    gesture = RecordingGesture()
+    native_scroll = RecordingNativeScroll(results=[_native_result(True)])
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        native_scroll=native_scroll,
+        session_repo=FakeSessionRepo(
+            resolution="1080x2400", device_serial="emulator-5554"
+        ),
+        clock=StepClock(step=0.01),
+        inspect=inspect,
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="reach",
+            kind="scroll_into_view",
+            parameters={
+                "role": "button",
+                "name_pattern": "Developer",
+                "direction": "down",
+                "max_scrolls": 3,
+            },
+        )
+    )
+
+    assert result.status == "passed"
+    assert gesture.swipe_calls == []
+    attempt = result.output["scroll_attempts"][0]
+    assert attempt["method"] == "native_scroll"
+    assert attempt["native_scroll"]["success"] is True
+    assert "fallback_reason" not in attempt
+
+
+def test_scroll_into_view_failed_native_scroll_falls_back_same_attempt() -> None:
+    list_node = _tree_node(
+        "settings_list",
+        "scroll_view",
+        (0, 300, 1080, 1500),
+        states=("scrollable",),
+    )
+    inspect = RecordingInspect(trees=[_tree(list_node), _tree(list_node)])
+    find = FakeFindUseCase(results=[[], [_node("target")]])
+    gesture = RecordingGesture()
+    native_scroll = RecordingNativeScroll(
+        results=[_native_result(False, "native_scroll_helper_failed")]
+    )
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        native_scroll=native_scroll,
+        session_repo=FakeSessionRepo(
+            resolution="1080x2400", device_serial="emulator-5554"
+        ),
+        clock=StepClock(step=0.01),
+        inspect=inspect,
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="reach",
+            kind="scroll_into_view",
+            parameters={
+                "role": "button",
+                "name_pattern": "Developer",
+                "direction": "down",
+                "max_scrolls": 3,
+            },
+        )
+    )
+
+    assert result.status == "passed"
+    assert len(gesture.swipe_calls) == 1
+    assert result.output["attempts"] == 1
+    attempt = result.output["scroll_attempts"][0]
+    assert attempt["method"] == "scrollable_region_swipe"
+    assert attempt["fallback_reason"] == "native_scroll_helper_failed"
+    assert attempt["native_scroll"]["returncode"] == 1
+
+
+def test_scroll_into_view_non_android_session_does_not_attempt_native_scroll() -> None:
+    list_node = _tree_node(
+        "settings_list",
+        "scroll_view",
+        (0, 300, 1080, 1500),
+        states=("scrollable",),
+    )
+    inspect = RecordingInspect(trees=[_tree(list_node), _tree(list_node)])
+    find = FakeFindUseCase(results=[[], [_node("target")]])
+    gesture = RecordingGesture()
+    native_scroll = RecordingNativeScroll(results=[_native_result(True)])
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        native_scroll=native_scroll,
+        session_repo=FakeSessionRepo(resolution="1080x2400", backend="linux"),
+        clock=StepClock(step=0.01),
+        inspect=inspect,
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="reach",
+            kind="scroll_into_view",
+            parameters={
+                "role": "button",
+                "name_pattern": "Developer",
+                "direction": "down",
+                "max_scrolls": 3,
+            },
+        )
+    )
+
+    assert result.status == "passed"
+    assert native_scroll.calls == []
+    assert len(gesture.swipe_calls) == 1
+    assert "native_scroll" not in result.output["scroll_attempts"][0]
 
 
 # ─── AC-49-04: failure when max_scrolls reached ───────────────────────

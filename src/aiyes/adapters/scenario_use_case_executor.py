@@ -35,6 +35,7 @@ class ScenarioUseCaseExecutor:
         sleeper: Any = None,
         mouse: Any = None,
         gesture: Any = None,
+        native_scroll: Any = None,
         session_repo: Any = None,
         clock: Any = None,
     ) -> None:
@@ -53,6 +54,7 @@ class ScenarioUseCaseExecutor:
         self._sleeper = sleeper
         self._mouse = mouse
         self._gesture = gesture
+        self._native_scroll = native_scroll
         self._session_repo = session_repo
         self._clock = clock
         self._session_id = ""
@@ -235,19 +237,84 @@ class ScenarioUseCaseExecutor:
                 method = "scrollable_region_swipe"
                 selected_scrollable_id = scrollable.node_id
                 selected_bounds = list(scrollable.bounds)
+                native_output = self._try_native_scroll(
+                    session_id=session_id,
+                    node_id=scrollable.node_id,
+                    direction=direction,
+                    stable_id=scrollable.stable_id,
+                    bounds=scrollable.bounds,
+                )
+                if native_output is not None and native_output.get("success") is True:
+                    after_tree = _inspect_tree_snapshot(self._inspect, session_id)
+                    scroll_attempts.append(
+                        {
+                            "method": "native_scroll",
+                            "direction": direction,
+                            "selected_scrollable_id": selected_scrollable_id,
+                            "selected_bounds": selected_bounds,
+                            "native_scroll": native_output,
+                            "tree_changed": _tree_snapshot_changed(
+                                before_tree, after_tree
+                            ),
+                        }
+                    )
+                    attempts += 1
+                    continue
             self._gesture.swipe(session_id, x1, y1, x2, y2, 300)
             after_tree = _inspect_tree_snapshot(self._inspect, session_id)
-            scroll_attempts.append(
-                {
-                    "method": method,
-                    "direction": direction,
-                    "coordinates": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
-                    "selected_scrollable_id": selected_scrollable_id,
-                    "selected_bounds": selected_bounds,
-                    "tree_changed": _tree_snapshot_changed(before_tree, after_tree),
-                }
-            )
+            attempt = {
+                "method": method,
+                "direction": direction,
+                "coordinates": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+                "selected_scrollable_id": selected_scrollable_id,
+                "selected_bounds": selected_bounds,
+                "tree_changed": _tree_snapshot_changed(before_tree, after_tree),
+            }
+            if scrollable is not None and native_output is not None:
+                attempt["native_scroll"] = native_output
+                attempt["fallback_reason"] = native_output.get(
+                    "fallback_reason", "native_scroll_failed"
+                )
+            scroll_attempts.append(attempt)
             attempts += 1
+
+    def _try_native_scroll(
+        self,
+        *,
+        session_id: str,
+        node_id: str,
+        direction: str,
+        stable_id: str,
+        bounds: tuple[int, int, int, int],
+    ) -> Optional[dict[str, Any]]:
+        if self._native_scroll is None or self._session_repo is None:
+            return None
+        try:
+            session = self._session_repo.load(session_id)
+        except Exception:
+            return None
+        if getattr(session, "backend", "") != "android":
+            return None
+        try:
+            return _jsonable_dict(
+                self._native_scroll.scroll(
+                    session,
+                    node_id,
+                    direction,
+                    stable_id=stable_id,
+                    bounds=bounds,
+                )
+            )
+        except Exception as exc:
+            return {
+                "success": False,
+                "method": "android_accessibility_helper",
+                "node_id": node_id,
+                "direction": direction,
+                "stable_id": stable_id,
+                "bounds": list(bounds),
+                "fallback_reason": str(exc) or "native_scroll_failed",
+            }
 
     def _resolve_scroll_into_view_role_drift(
         self,
@@ -623,6 +690,7 @@ class _ScrollableCandidate:
     node_id: str
     bounds: tuple[int, int, int, int]
     area: int
+    stable_id: str = ""
 
 
 def _start_kwargs(params: Mapping[str, Any]) -> dict[str, Any]:
@@ -840,7 +908,12 @@ def _scrollable_candidates(
             continue
         _, _, width, height = bounds
         candidates.append(
-            _ScrollableCandidate(node_id=node_id, bounds=bounds, area=width * height)
+            _ScrollableCandidate(
+                node_id=node_id,
+                bounds=bounds,
+                area=width * height,
+                stable_id=_node_stable_id(node),
+            )
         )
     return candidates
 
@@ -900,6 +973,14 @@ def _node_states(value: Any) -> tuple[str, ...]:
     if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
         return ()
     return tuple(str(state).lower() for state in raw)
+
+
+def _node_stable_id(value: Any) -> str:
+    if isinstance(value, Mapping):
+        raw = value.get("stable_id", "")
+    else:
+        raw = getattr(value, "stable_id", "")
+    return str(raw) if raw else ""
 
 
 def _visible_bounds(bounds: tuple[int, int, int, int], viewport: tuple[int, int]) -> bool:

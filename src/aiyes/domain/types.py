@@ -41,6 +41,29 @@ class ActionPortResult:
             object.__setattr__(self, "node_states", tuple(self.node_states))
 
 
+@dataclasses.dataclass(frozen=True)
+class NativeScrollResult:
+    """Result of attempting a platform semantic scroll action."""
+
+    success: bool
+    method: str
+    requested_action: str
+    action_id: int
+    node_id: str
+    direction: str
+    stable_id: Optional[str] = None
+    bounds: Optional[Tuple[int, int, int, int]] = None
+    returncode: Optional[int] = None
+    stdout_summary: str = ""
+    stderr_summary: str = ""
+    fallback_reason: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        """Ensure tuple fields are immutable."""
+        if isinstance(self.bounds, list):
+            object.__setattr__(self, "bounds", tuple(self.bounds))
+
+
 _ANDROID_DEPS = frozenset(("adb", "android_device"))
 
 
