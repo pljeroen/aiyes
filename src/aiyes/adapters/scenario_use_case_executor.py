@@ -10,12 +10,14 @@ import sys
 from collections.abc import Mapping, Sequence
 from typing import Any, Optional
 
+from aiyes.domain.matching import name_matches
 from aiyes.domain.scenario import _VALID_DIRECTIONS, ScenarioStep
 from aiyes.domain.scenario_assertions import evaluate_scenario_assertion
 from aiyes.domain.tree import AccessibilityTree, flatten_nodes
 from aiyes.ports.scenario_executor import ScenarioStepExecutionResult
 
 _NO_PROGRESS_ATTEMPT_LIMIT = 2
+_SELECTOR_DIAGNOSTIC_LIMIT = 5
 
 
 class ScenarioUseCaseExecutor:
@@ -163,6 +165,7 @@ class ScenarioUseCaseExecutor:
         attempts = 0
         scroll_attempts: list[dict[str, Any]] = []
         unchanged_by_scrollable: dict[str, int] = {}
+        latest_selector_diagnostics: Optional[dict[str, Any]] = None
 
         while True:
             nodes = self._find.execute(
@@ -207,6 +210,14 @@ class ScenarioUseCaseExecutor:
                 return advisory_result
 
             if attempts >= max_scrolls:
+                latest_selector_diagnostics = self._ensure_selector_diagnostics(
+                    latest_selector_diagnostics,
+                    session_id=session_id,
+                    viewport=viewport,
+                    requested_role=role,
+                    name_pattern=name_pattern,
+                    state=state,
+                )
                 return self._scroll_into_view_failure(
                     step.id,
                     attempts,
@@ -215,8 +226,17 @@ class ScenarioUseCaseExecutor:
                     viewport,
                     "scrolls",
                     scroll_attempts,
+                    latest_selector_diagnostics,
                 )
             if elapsed_now >= max_seconds:
+                latest_selector_diagnostics = self._ensure_selector_diagnostics(
+                    latest_selector_diagnostics,
+                    session_id=session_id,
+                    viewport=viewport,
+                    requested_role=role,
+                    name_pattern=name_pattern,
+                    state=state,
+                )
                 return self._scroll_into_view_failure(
                     step.id,
                     attempts,
@@ -225,9 +245,17 @@ class ScenarioUseCaseExecutor:
                     viewport,
                     "seconds",
                     scroll_attempts,
+                    latest_selector_diagnostics,
                 )
 
             before_tree = _inspect_tree_snapshot(self._inspect, session_id)
+            latest_selector_diagnostics = _selector_diagnostics(
+                before_tree,
+                viewport,
+                requested_role=role,
+                name_pattern=name_pattern,
+                state=state,
+            )
             before_fingerprint = _tree_snapshot_fingerprint(before_tree)
             scrollable = _select_scrollable_candidate(
                 _scrollable_candidates(before_tree, viewport),
@@ -288,6 +316,7 @@ class ScenarioUseCaseExecutor:
                             viewport,
                             "no_progress",
                             scroll_attempts,
+                            latest_selector_diagnostics,
                         )
                     continue
             self._gesture.swipe(session_id, x1, y1, x2, y2, 300)
@@ -328,6 +357,7 @@ class ScenarioUseCaseExecutor:
                     viewport,
                     "no_progress",
                     scroll_attempts,
+                    latest_selector_diagnostics,
                 )
 
     def _try_native_scroll(
@@ -428,6 +458,11 @@ class ScenarioUseCaseExecutor:
             attempts=attempts,
             elapsed=elapsed,
             direction=direction,
+            viewport=_parse_viewport(
+                self._session_repo,
+                session_id,
+                _cache=self._viewport_cache,
+            ),
         )
         output["scroll_attempts"] = scroll_attempts
         output["failure_class"] = "ambiguous_role_drift"
@@ -443,6 +478,26 @@ class ScenarioUseCaseExecutor:
             error=error,
         )
 
+    def _ensure_selector_diagnostics(
+        self,
+        diagnostics: Optional[dict[str, Any]],
+        *,
+        session_id: str,
+        viewport: tuple[int, int],
+        requested_role: str,
+        name_pattern: Any,
+        state: Any,
+    ) -> Optional[dict[str, Any]]:
+        if diagnostics is not None:
+            return diagnostics
+        return _selector_diagnostics(
+            _inspect_tree_snapshot(self._inspect, session_id),
+            viewport,
+            requested_role=requested_role,
+            name_pattern=name_pattern,
+            state=state,
+        )
+
     def _scroll_into_view_failure(
         self,
         step_id: str,
@@ -452,6 +507,7 @@ class ScenarioUseCaseExecutor:
         viewport: tuple[int, int],
         bound_hit: str,
         scroll_attempts: list[dict[str, Any]],
+        selector_diagnostics: Optional[dict[str, Any]] = None,
     ) -> ScenarioStepExecutionResult:
         progress = _final_scroll_progress(scroll_attempts)
         failure_class = _scroll_failure_class(bound_hit, progress, scroll_attempts)
@@ -466,6 +522,8 @@ class ScenarioUseCaseExecutor:
             "failure_class": failure_class,
             "scroll_attempts": scroll_attempts,
         }
+        if selector_diagnostics is not None:
+            output["selector_diagnostics"] = selector_diagnostics
         self._outputs[step_id] = output
         return ScenarioStepExecutionResult(
             step_id=step_id,
@@ -500,15 +558,33 @@ class ScenarioUseCaseExecutor:
             return _jsonable_dict(result), ""
 
         if step.kind == "find":
+            session_id = self._require_session()
+            role = str(params.get("role", "*"))
+            name_pattern = params.get("name_pattern", params.get("name"))
             result = self._find.execute(
-                session_id=self._require_session(),
-                role=str(params.get("role", "*")),
-                name_pattern=params.get("name_pattern", params.get("name")),
+                session_id=session_id,
+                role=role,
+                name_pattern=name_pattern,
                 state=params.get("state"),
                 no_prune=bool(params.get("no_prune", False)),
             )
             nodes = [_jsonable_dict(node) for node in result]
-            return {"nodes": nodes}, ""
+            output: dict[str, Any] = {"nodes": nodes}
+            if not nodes:
+                diagnostics = _selector_diagnostics(
+                    _inspect_tree_snapshot(self._inspect, session_id),
+                    _parse_viewport(
+                        self._session_repo,
+                        session_id,
+                        _cache=self._viewport_cache,
+                    ),
+                    requested_role=role,
+                    name_pattern=name_pattern,
+                    state=params.get("state"),
+                )
+                if diagnostics is not None:
+                    output["selector_diagnostics"] = diagnostics
+            return output, ""
 
         if step.kind == "action":
             result = self._action.execute(
@@ -911,7 +987,20 @@ def _role_drift_failure_output(
     attempts: int,
     elapsed: float,
     direction: str,
+    viewport: tuple[int, int],
 ) -> dict[str, Any]:
+    selector_diagnostics = _selector_diagnostics_from_nodes(
+        candidates,
+        viewport,
+        requested_role=requested_role,
+        name_pattern=name_pattern,
+        state=None,
+    )
+    bounded_candidates = (
+        selector_diagnostics.get("candidates", [])
+        if selector_diagnostics is not None
+        else []
+    )
     return {
         "found": False,
         "attempts": attempts,
@@ -922,14 +1011,8 @@ def _role_drift_failure_output(
         "name_pattern": name_pattern,
         "candidate_count": len(actionable_candidates),
         "observed_roles": sorted({_node_role(node) for node in candidates}),
-        "candidates": [
-            {
-                "node_id": _node_id(node),
-                "role": _node_role(node),
-                "name": _node_name(node),
-            }
-            for node in actionable_candidates
-        ],
+        "candidates": bounded_candidates,
+        "selector_diagnostics": selector_diagnostics,
     }
 
 
@@ -1153,6 +1236,131 @@ def _tree_snapshot_changed(before: Any, after: Any) -> bool:
     if before_fingerprint is None or after_fingerprint is None:
         return False
     return before_fingerprint != after_fingerprint
+
+
+def _selector_diagnostics(
+    tree_snapshot: Any,
+    viewport: tuple[int, int],
+    *,
+    requested_role: str,
+    name_pattern: Any,
+    state: Any,
+) -> Optional[dict[str, Any]]:
+    if not _non_empty_pattern(name_pattern):
+        return None
+    pattern = str(name_pattern)
+    return _selector_diagnostics_from_nodes(
+        _tree_snapshot_nodes(tree_snapshot),
+        viewport,
+        requested_role=requested_role,
+        name_pattern=pattern,
+        state=state,
+    )
+
+
+def _selector_diagnostics_from_nodes(
+    nodes: Sequence[Any],
+    viewport: tuple[int, int],
+    *,
+    requested_role: str,
+    name_pattern: str,
+    state: Any,
+) -> Optional[dict[str, Any]]:
+    candidates = []
+    for node in nodes:
+        candidate = _selector_candidate_diagnostic(
+            node,
+            viewport,
+            requested_role=requested_role,
+            name_pattern=name_pattern,
+        )
+        if candidate is not None:
+            candidates.append(candidate)
+
+    candidates.sort(key=_selector_candidate_sort_key)
+    bounded = candidates[:_SELECTOR_DIAGNOSTIC_LIMIT]
+    diagnostics: dict[str, Any] = {
+        "requested_selector": {
+            "role": requested_role,
+            "name_pattern": name_pattern,
+            "state": state,
+        },
+        "candidate_count": len(candidates),
+        "max_candidates": _SELECTOR_DIAGNOSTIC_LIMIT,
+        "candidates": bounded,
+    }
+    hint = _selector_hint(requested_role, name_pattern, candidates)
+    if hint:
+        diagnostics["hint"] = hint
+    return diagnostics
+
+
+def _selector_candidate_diagnostic(
+    node: Any,
+    viewport: tuple[int, int],
+    *,
+    requested_role: str,
+    name_pattern: str,
+) -> Optional[dict[str, Any]]:
+    role = _node_role(node)
+    name = _node_name(node)
+    role_matches = requested_role == "*" or role == requested_role
+    name_matches_requested = name_matches(name, name_pattern)
+    if not role_matches and not name_matches_requested:
+        return None
+
+    bounds = _node_bounds(node)
+    visible = bounds is not None and _visible_bounds(bounds, viewport)
+    actionable = _scroll_target_actionable(node)
+    reasons = []
+    if not role_matches:
+        reasons.append("role_mismatch")
+    if not name_matches_requested:
+        reasons.append("name_mismatch")
+    if not visible:
+        reasons.append("not_visible")
+    if not actionable:
+        reasons.append("not_actionable")
+
+    return {
+        "node_id": _node_id(node),
+        "role": role,
+        "requested_role": requested_role,
+        "observed_role": role,
+        "name": name,
+        "visible": visible,
+        "actionable": actionable,
+        "reasons": reasons,
+    }
+
+
+def _selector_candidate_sort_key(candidate: Mapping[str, Any]) -> tuple[int, int, str]:
+    reasons = candidate.get("reasons", ())
+    if not isinstance(reasons, Sequence) or isinstance(reasons, (str, bytes)):
+        reasons = ()
+    reason_count = len(reasons)
+    actionable_penalty = 0 if candidate.get("actionable") is True else 1
+    return (reason_count, actionable_penalty, str(candidate.get("node_id", "")))
+
+
+def _selector_hint(
+    requested_role: str,
+    name_pattern: str,
+    candidates: list[dict[str, Any]],
+) -> str:
+    if requested_role != "View":
+        return ""
+    for candidate in candidates:
+        if (
+            candidate.get("observed_role") == "Button"
+            and candidate.get("name") == name_pattern
+            and candidate.get("actionable") is True
+        ):
+            return (
+                f"Requested role View missed actionable Button named {name_pattern}; "
+                'use role="*" or role="Button" for this selector.'
+            )
+    return ""
 
 
 def _tree_snapshot_progress(

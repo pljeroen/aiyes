@@ -58,6 +58,15 @@ The runner records declared steps through a deterministic dry-run executor
 unless `--real` is supplied. Real observe-act-verify execution uses the same
 scenario schema, assertion flow, and evidence format.
 
+## Android Flutter Selectors
+
+Flutter Android apps often expose tappable rows as `Button` even when scenario
+authors think of them as views. Prefer stable accessible names in
+`name_pattern`, and use `role="*"` when the role is not part of the behavior
+being verified. If a selector fails, scenario output includes bounded candidate
+diagnostics with likely alternatives and mismatch reasons such as role mismatch,
+name mismatch, not visible, or not actionable.
+
 ## Optional CI Pattern
 
 Default CI should validate scenario files and docs without requiring a real GUI

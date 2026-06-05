@@ -197,6 +197,22 @@ def _candidate(
     }
 
 
+def _diagnostic_node(
+    node_id: str,
+    role: str,
+    name: str,
+    bounds: list[int] | None = None,
+    actions: list[str] | None = None,
+) -> dict:
+    return {
+        "id": node_id,
+        "role": role,
+        "name": name,
+        "bounds": bounds or [0, 0, 100, 50],
+        "actions": actions if actions is not None else [],
+    }
+
+
 def _executor(
     *,
     find: Any,
@@ -402,10 +418,22 @@ def test_scroll_into_view_ambiguous_role_drift_candidates_fail_before_swipe() ->
     assert result.output["name_pattern"] == "Developer"
     assert result.output["candidate_count"] == 2
     assert result.output["observed_roles"] == ["Button", "Link"]
-    assert result.output["candidates"] == [
+    assert [
+        {
+            "node_id": candidate["node_id"],
+            "role": candidate["role"],
+            "name": candidate["name"],
+        }
+        for candidate in result.output["candidates"]
+    ] == [
         {"node_id": "dev_button", "role": "Button", "name": "Developer"},
         {"node_id": "dev_link", "role": "Link", "name": "Developer"},
     ]
+    assert result.output["selector_diagnostics"]["max_candidates"] == 5
+    assert result.output["selector_diagnostics"]["hint"] == (
+        "Requested role View missed actionable Button named Developer; "
+        'use role="*" or role="Button" for this selector.'
+    )
     assert gesture.swipe_calls == []
 
 
@@ -441,6 +469,10 @@ def test_scroll_into_view_role_drift_without_actionable_candidate_fails_with_dia
     assert result.output["name_pattern"] == "Developer"
     assert result.output["candidate_count"] == 0
     assert result.output["observed_roles"] == ["TextView"]
+    assert result.output["selector_diagnostics"]["candidates"][0]["reasons"] == [
+        "role_mismatch",
+        "not_actionable",
+    ]
     assert gesture.swipe_calls == []
 
 
@@ -480,6 +512,287 @@ def test_find_use_case_role_view_does_not_return_button() -> None:
     result = uc.execute(session_id="s1", role="View", name_pattern="Developer")
 
     assert result == []
+
+
+def test_find_step_role_view_same_name_button_emits_selector_hint() -> None:
+    inspect = RecordingInspect(
+        trees=[
+            {
+                "roots": [
+                    _diagnostic_node(
+                        "target_markets",
+                        "Button",
+                        "Target Markets",
+                        actions=["click"],
+                    )
+                ]
+            }
+        ]
+    )
+    find = RoleAwareFakeFindUseCase(
+        exact_role="View",
+        exact_results=[[]],
+        wildcard_results=[],
+    )
+    gesture = RecordingGesture()
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        session_repo=FakeSessionRepo(resolution="1080x2400"),
+        clock=StepClock(),
+        inspect=inspect,
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="find_target",
+            kind="find",
+            parameters={"role": "View", "name_pattern": "Target Markets"},
+        )
+    )
+
+    assert result.status == "passed"
+    assert result.output["nodes"] == []
+    diagnostics = result.output["selector_diagnostics"]
+    assert diagnostics["requested_selector"] == {
+        "role": "View",
+        "name_pattern": "Target Markets",
+        "state": None,
+    }
+    assert diagnostics["hint"] == (
+        "Requested role View missed actionable Button named Target Markets; "
+        'use role="*" or role="Button" for this selector.'
+    )
+    assert diagnostics["candidates"] == [
+        {
+            "node_id": "target_markets",
+            "role": "Button",
+            "requested_role": "View",
+            "observed_role": "Button",
+            "name": "Target Markets",
+            "visible": True,
+            "actionable": True,
+            "reasons": ["role_mismatch"],
+        }
+    ]
+    assert [call["role"] for call in find.calls] == ["View"]
+
+
+def test_scroll_into_view_selector_diagnostics_are_bounded() -> None:
+    inspect = RecordingInspect(
+        trees=[
+            {
+                "roots": [
+                    _diagnostic_node(
+                        f"candidate_{index}",
+                        "Button",
+                        f"Target Markets {index}",
+                        actions=["click"],
+                    )
+                    for index in range(20)
+                ]
+            }
+        ]
+        * 4
+    )
+    find = FakeFindUseCase(results=[[]] * 10)
+    gesture = RecordingGesture()
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        session_repo=FakeSessionRepo(resolution="1080x2400"),
+        clock=StepClock(step=0.01),
+        inspect=inspect,
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="reach",
+            kind="scroll_into_view",
+            parameters={
+                "role": "View",
+                "name_pattern": "Target Markets",
+                "max_scrolls": 1,
+            },
+        )
+    )
+
+    diagnostics = result.output["selector_diagnostics"]
+    assert result.status == "failed"
+    assert diagnostics["candidate_count"] == 20
+    assert diagnostics["max_candidates"] == 5
+    assert len(diagnostics["candidates"]) == 5
+    assert "candidate_19" not in json.dumps(diagnostics)
+
+
+def test_scroll_into_view_role_drift_failure_uses_bounded_selector_diagnostics() -> None:
+    find = RoleAwareFakeFindUseCase(
+        exact_role="View",
+        exact_results=[[]],
+        wildcard_results=[
+            [
+                _candidate(f"candidate_{index}", "Button", "Target Markets")
+                for index in range(20)
+            ]
+        ],
+    )
+    gesture = RecordingGesture()
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        session_repo=FakeSessionRepo(resolution="1080x2400"),
+        clock=StepClock(),
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="reach",
+            kind="scroll_into_view",
+            parameters={
+                "role": "View",
+                "name_pattern": "Target Markets",
+                "max_scrolls": 3,
+            },
+        )
+    )
+
+    assert result.status == "failed"
+    diagnostics = result.output["selector_diagnostics"]
+    assert diagnostics["candidate_count"] == 20
+    assert diagnostics["max_candidates"] == 5
+    assert len(diagnostics["candidates"]) == 5
+    assert diagnostics["candidates"][0]["requested_role"] == "View"
+    assert diagnostics["candidates"][0]["observed_role"] == "Button"
+    assert diagnostics["hint"] == (
+        "Requested role View missed actionable Button named Target Markets; "
+        'use role="*" or role="Button" for this selector.'
+    )
+    assert "candidate_19" not in json.dumps(result.output["candidates"])
+
+
+def test_scroll_into_view_immediate_bound_failure_emits_selector_diagnostics() -> None:
+    inspect = RecordingInspect(
+        trees=[
+            {
+                "roots": [
+                    _diagnostic_node(
+                        "target_markets",
+                        "Button",
+                        "Target Markets",
+                        actions=["click"],
+                    )
+                ]
+            }
+        ]
+    )
+    find = FakeFindUseCase(results=[[]])
+    gesture = RecordingGesture()
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        session_repo=FakeSessionRepo(resolution="1080x2400"),
+        clock=StepClock(),
+        inspect=inspect,
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="reach",
+            kind="scroll_into_view",
+            parameters={
+                "role": "View",
+                "name_pattern": "Target Markets",
+                "max_scrolls": 0,
+            },
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.output["selector_diagnostics"]["candidates"][0]["node_id"] == (
+        "target_markets"
+    )
+    assert len(inspect.calls) == 1
+    assert gesture.swipe_calls == []
+
+
+def test_selector_diagnostics_classify_mismatch_reasons() -> None:
+    inspect = RecordingInspect(
+        trees=[
+            {
+                "roots": [
+                    _diagnostic_node(
+                        "role_drift",
+                        "View",
+                        "Target Markets",
+                        actions=["click"],
+                    ),
+                    _diagnostic_node(
+                        "hidden",
+                        "Button",
+                        "Target Markets",
+                        bounds=[0, 2600, 100, 50],
+                        actions=["click"],
+                    ),
+                    _diagnostic_node(
+                        "not_actionable",
+                        "TextView",
+                        "Target Markets",
+                    ),
+                    _diagnostic_node(
+                        "name_mismatch",
+                        "Button",
+                        "Settings",
+                        actions=["click"],
+                    ),
+                ]
+            }
+        ]
+    )
+    find = RoleAwareFakeFindUseCase(
+        exact_role="Button",
+        exact_results=[[]],
+        wildcard_results=[],
+    )
+    gesture = RecordingGesture()
+    executor = _executor(
+        find=find,
+        gesture=gesture,
+        session_repo=FakeSessionRepo(resolution="1080x2400"),
+        clock=StepClock(),
+        inspect=inspect,
+    )
+
+    result = executor.execute(
+        ScenarioStep(
+            id="find_target",
+            kind="find",
+            parameters={"role": "Button", "name_pattern": "Target Markets"},
+        )
+    )
+
+    candidates = {
+        candidate["node_id"]: candidate
+        for candidate in result.output["selector_diagnostics"]["candidates"]
+    }
+    assert candidates["role_drift"]["reasons"] == ["role_mismatch"]
+    assert candidates["hidden"]["reasons"] == ["not_visible"]
+    assert candidates["not_actionable"]["reasons"] == [
+        "role_mismatch",
+        "not_actionable",
+    ]
+    assert candidates["name_mismatch"]["reasons"] == ["name_mismatch"]
+
+
+def test_release_scenario_docs_include_selector_guidance_without_methodology() -> None:
+    content = (Path(__file__).parent.parent / "docs" / "release-scenarios.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'role="*"' in content
+    assert "stable accessible names" in content
+    assert "Flutter" in content
+    for forbidden in ("AIYES-102", "CONTRACT_INTAKE", "TDDv6", "review artifact"):
+        assert forbidden not in content
 
 
 # ─── AC-49-03: target appears after K-1 scrolls ───────────────────────
