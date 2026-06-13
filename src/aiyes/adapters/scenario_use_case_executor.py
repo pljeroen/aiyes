@@ -19,6 +19,20 @@ from aiyes.ports.scenario_executor import ScenarioStepExecutionResult
 _NO_PROGRESS_ATTEMPT_LIMIT = 2
 _SELECTOR_DIAGNOSTIC_LIMIT = 5
 
+# AIYES-103 stable, non-interpolated classified failure codes.
+_FC_EMPTY_SOURCE_NODE_ID = "empty_source_node_id"
+_FC_REQUIRED_FIND_NO_NODES = "required_find_no_nodes"
+
+# OD-03: diagnostic_summary is a single line truncated at 200 chars.
+_SUMMARY_MAX_LEN = 200
+
+
+def _bounded_summary(summary: object) -> str:
+    """Single line truncated to SUMMARY_MAX_LEN; "" when no text (OD-03)."""
+    if not isinstance(summary, str) or not summary:
+        return ""
+    return summary.splitlines()[0][:_SUMMARY_MAX_LEN]
+
 
 class ScenarioUseCaseExecutor:
     """Execute scenario steps through existing use-case boundaries."""
@@ -44,6 +58,7 @@ class ScenarioUseCaseExecutor:
         native_scroll: Any = None,
         session_repo: Any = None,
         clock: Any = None,
+        diagnostic_log: Any = None,
     ) -> None:
         self._session_start = session_start
         self._inspect = inspect
@@ -63,16 +78,28 @@ class ScenarioUseCaseExecutor:
         self._native_scroll = native_scroll
         self._session_repo = session_repo
         self._clock = clock
+        self._diagnostic_log = diagnostic_log
         self._session_id = ""
         self._outputs: dict[str, Any] = {}
+        self._step_kinds: dict[str, str] = {}
+        # The requested selector triple of each executed find step, recorded
+        # INDEPENDENTLY of selector_diagnostics so a consumed-empty action can
+        # always attribute requested_selector for a find source even when the
+        # find produced no diagnostics (FC-DIAG-06 / R-01).
+        self._find_selectors: dict[str, dict[str, Any]] = {}
         self._viewport_cache: dict[str, tuple[int, int]] = {}
 
     def execute(self, step: ScenarioStep) -> ScenarioStepExecutionResult:
         """Execute one scenario step and return a normalized result."""
+        self._step_kinds[step.id] = step.kind
         if step.kind == "assert":
             return self._execute_assert(step)
         if step.kind == "scroll_into_view":
             return self._execute_scroll_into_view(step)
+        if step.kind == "find":
+            return self._execute_find(step)
+        if step.kind == "action":
+            return self._execute_action(step)
 
         try:
             output, session_id = self._execute(step)
@@ -93,6 +120,206 @@ class ScenarioUseCaseExecutor:
             error="",
             session_id=session_id,
         )
+
+    def _execute_find(self, step: ScenarioStep) -> ScenarioStepExecutionResult:
+        """Execute a find step, applying the explicit required/optional policy.
+
+        Optional finds (required absent or False) with zero nodes remain passed
+        observations (FC-COMPAT-01/02). A required find with zero nodes fails at
+        the find step with a stable failure_code and selector_diagnostics when
+        available (FC-FIND-01/02/03), and emits LE-01.
+        """
+        # Record the requested selector triple for this find BEFORE execution,
+        # so a later consumed-empty action can attribute requested_selector for
+        # this find source regardless of whether diagnostics were produced.
+        self._find_selectors[step.id] = _requested_selector_triple(step.parameters)
+
+        try:
+            output, session_id = self._execute(step)
+        except Exception as exc:
+            return ScenarioStepExecutionResult(
+                step_id=step.id,
+                status="failed",
+                output={},
+                error=str(exc),
+                session_id=self._session_id,
+            )
+
+        self._outputs[step.id] = output
+        nodes = output.get("nodes") if isinstance(output, Mapping) else None
+        required = step.parameters.get("required") is True
+        if required and not nodes:
+            failure_output = dict(output)
+            failure_output["failure_code"] = _FC_REQUIRED_FIND_NO_NODES
+            failure_output["source_step_id"] = step.id
+            failure_output["source_step_kind"] = "find"
+            self._outputs[step.id] = failure_output
+            self._emit_classification(
+                step.id,
+                _FC_REQUIRED_FIND_NO_NODES,
+                self._find_summary(step, failure_output),
+            )
+            return ScenarioStepExecutionResult(
+                step_id=step.id,
+                status="failed",
+                output=failure_output,
+                error=_FC_REQUIRED_FIND_NO_NODES,
+                session_id=session_id,
+            )
+
+        return ScenarioStepExecutionResult(
+            step_id=step.id,
+            status="passed",
+            output=output,
+            error="",
+            session_id=session_id,
+        )
+
+    def _execute_action(self, step: ScenarioStep) -> ScenarioStepExecutionResult:
+        """Execute an action step, classifying a consumed-empty source failure.
+
+        When the action consumes a source step whose output has no usable node
+        id (and no explicit node_id is supplied), the action fails BEFORE
+        invoking the underlying action use case (FC-DIAG-01) with structured
+        diagnostics (FC-DIAG-02..07) and emits LE-01.
+        """
+        params = step.parameters
+        if not params.get("node_id"):
+            source = params.get("source")
+            if source:
+                source_key = str(source)
+                # AIYES-103 classification applies to a source step that ran and
+                # produced an output with no usable node id. A genuinely missing
+                # source step (never produced) keeps the legacy free-form path.
+                if source_key in self._outputs and not _first_node_id(
+                    self._outputs[source_key]
+                ):
+                    return self._consumed_empty_action_failure(
+                        step, source_key, self._outputs[source_key]
+                    )
+
+        try:
+            output, session_id = self._execute(step)
+        except Exception as exc:
+            return ScenarioStepExecutionResult(
+                step_id=step.id,
+                status="failed",
+                output={},
+                error=str(exc),
+                session_id=self._session_id,
+            )
+
+        self._outputs[step.id] = output
+        return ScenarioStepExecutionResult(
+            step_id=step.id,
+            status="passed",
+            output=output,
+            error="",
+            session_id=session_id,
+        )
+
+    def _consumed_empty_action_failure(
+        self,
+        step: ScenarioStep,
+        source_key: str,
+        source_output: Any,
+    ) -> ScenarioStepExecutionResult:
+        failure_output: dict[str, Any] = {
+            "failure_code": _FC_EMPTY_SOURCE_NODE_ID,
+            "source_step_id": source_key,
+        }
+        source_kind = self._step_kinds.get(source_key)
+        if source_kind is not None:
+            failure_output["source_step_kind"] = source_kind
+        # FC-DIAG-06 (R-01): requested_selector is populated for EVERY find
+        # source from the selector triple recorded when the find ran —
+        # independent of whether the find produced selector_diagnostics.
+        if source_kind == "find" and source_key in self._find_selectors:
+            failure_output["requested_selector"] = dict(
+                self._find_selectors[source_key]
+            )
+        elif isinstance(source_output, Mapping):
+            requested_selector = self._requested_selector_from_source(source_output)
+            if requested_selector is not None:
+                failure_output["requested_selector"] = requested_selector
+        # selector_diagnostics is reused verbatim only when the source genuinely
+        # produced it; it is never fabricated (FC-DIAG-07).
+        if isinstance(source_output, Mapping):
+            diagnostics = source_output.get("selector_diagnostics")
+            if diagnostics is not None:
+                failure_output["selector_diagnostics"] = diagnostics
+        self._outputs[step.id] = failure_output
+        self._emit_classification(
+            step.id,
+            _FC_EMPTY_SOURCE_NODE_ID,
+            f"action {step.id!r} consumed empty source {source_key!r}",
+        )
+        return ScenarioStepExecutionResult(
+            step_id=step.id,
+            status="failed",
+            output=failure_output,
+            error=_FC_EMPTY_SOURCE_NODE_ID,
+            session_id=self._session_id,
+        )
+
+    @staticmethod
+    def _requested_selector_from_source(
+        source_output: Mapping[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        """Recover the requested selector triple from a find source output.
+
+        Prefers the selector embedded in selector_diagnostics (the same triple
+        the find branch built); falls back to None when absent.
+        """
+        diagnostics = source_output.get("selector_diagnostics")
+        if isinstance(diagnostics, Mapping):
+            requested = diagnostics.get("requested_selector")
+            if isinstance(requested, Mapping):
+                return {
+                    "role": requested.get("role"),
+                    "name_pattern": requested.get("name_pattern"),
+                    "state": requested.get("state"),
+                }
+        return None
+
+    @staticmethod
+    def _find_summary(step: ScenarioStep, output: Mapping[str, Any]) -> str:
+        role = step.parameters.get("role", "*")
+        name_pattern = step.parameters.get("name_pattern", step.parameters.get("name"))
+        return (
+            f"required find {step.id!r} matched zero nodes "
+            f"(role={role!r}, name_pattern={name_pattern!r})"
+        )
+
+    def _emit_classification(
+        self, step_id: str, failure_code: str, summary: str
+    ) -> None:
+        """Emit one LE-01 event, fail-open (FC-OBS-01/02). Never raises.
+
+        Per the DiagnosticEventPort invariant (R-02) the OBSERVABLE emission-
+        failure count is owned and self-incremented by the sink. The try/except
+        here is defense-in-depth only — it guarantees a non-conforming sink can
+        never break the step/run outcome; it deliberately does NOT touch the
+        count, which the conforming production sink owns.
+        """
+        log = self._diagnostic_log
+        if log is None:
+            return
+        try:
+            from aiyes.domain.diagnostic_event import DiagnosticEvent
+
+            log.emit_event(
+                DiagnosticEvent(
+                    action="scenario.diagnostic.failure_classified",
+                    contract_id="AIYES-103",
+                    step_id=step_id,
+                    failure_code=failure_code,
+                    diagnostic_summary=_bounded_summary(summary),
+                )
+            )
+        except Exception:
+            # Fail-open: emission must never affect the step/run outcome.
+            pass
 
     def _execute_assert(self, step: ScenarioStep) -> ScenarioStepExecutionResult:
         """Evaluate an assertion step against accumulated step outputs.
@@ -829,6 +1056,20 @@ class _ScrollableCandidate:
     stable_id: str = ""
 
 
+def _requested_selector_triple(params: Mapping[str, Any]) -> dict[str, Any]:
+    """Recover a find step's requested selector triple from its parameters.
+
+    Mirrors the find branch of _execute: name_pattern falls back to name. The
+    triple is recorded for every find so a consumed-empty action can attribute
+    requested_selector independent of selector_diagnostics (FC-DIAG-06).
+    """
+    return {
+        "role": str(params.get("role", "*")),
+        "name_pattern": params.get("name_pattern", params.get("name")),
+        "state": params.get("state"),
+    }
+
+
 def _start_kwargs(params: Mapping[str, Any]) -> dict[str, Any]:
     command = params.get("command", "")
     backend = str(params.get("backend", "linux"))
@@ -1073,7 +1314,9 @@ def _tree_snapshot_nodes(tree_snapshot: Any) -> list[Any]:
         if roots is not None:
             return _walk_tree_nodes([roots])
         return _walk_tree_nodes([tree_snapshot])
-    if isinstance(tree_snapshot, Sequence) and not isinstance(tree_snapshot, (str, bytes)):
+    if isinstance(tree_snapshot, Sequence) and not isinstance(
+        tree_snapshot, (str, bytes)
+    ):
         return _walk_tree_nodes(tree_snapshot)
     roots = getattr(tree_snapshot, "roots", None)
     if isinstance(roots, Sequence) and not isinstance(roots, (str, bytes)):
@@ -1126,7 +1369,9 @@ def _node_stable_id(value: Any) -> str:
     return str(raw) if raw else ""
 
 
-def _visible_bounds(bounds: tuple[int, int, int, int], viewport: tuple[int, int]) -> bool:
+def _visible_bounds(
+    bounds: tuple[int, int, int, int], viewport: tuple[int, int]
+) -> bool:
     x, y, width, height = bounds
     if width <= 0 or height <= 0:
         return False

@@ -30,12 +30,17 @@ class DebugBundleUseCase:
         operation_log: Any,
         tree_store: Any,
         screenshot_store: Any,
+        diagnostic_log: Any = None,
     ) -> None:
         self._session_repo = session_repo
         self._doctor_uc = doctor_uc
         self._operation_log = operation_log
         self._tree_store = tree_store
         self._screenshot_store = screenshot_store
+        # Optional DiagnosticEventPort sink — surfaces the observable diagnostic
+        # emission-failure count so an operator can read it in production
+        # (AIYES-103 R-06 reachability).
+        self._diagnostic_log = diagnostic_log
 
     def execute(
         self,
@@ -49,10 +54,13 @@ class DebugBundleUseCase:
         return {
             "schema_version": 1,
             "session": _session_summary(session),
-            "doctor": [dataclasses.asdict(result) for result in self._doctor_uc.execute()],
+            "doctor": [
+                dataclasses.asdict(result) for result in self._doctor_uc.execute()
+            ],
             "operations": _operation_summary(self._operation_log.read(session_id)),
             "tree": _tree_summary(self._tree_store.load_tree(session_id)),
             "screenshot": _screenshot_summary(self._screenshot_store, session_id),
+            "diagnostics": _diagnostics_summary(self._diagnostic_log),
             "environment": redact_environment(environ),
         }
 
@@ -101,6 +109,22 @@ def _operation_summary(records: Any) -> Dict[str, Any]:
     }
 
 
+def _diagnostics_summary(diagnostic_log: Any) -> Dict[str, Any]:
+    """Surface the observable diagnostic emission-failure count (R-06).
+
+    Reads the sink-owned emission_failure_count() so an operator can observe
+    fail-open diagnostic losses in production. When no sink is wired, reports
+    availability False with a zero count rather than omitting the section.
+    """
+    if diagnostic_log is None:
+        return {"available": False, "emission_failure_count": 0}
+    try:
+        count = int(diagnostic_log.emission_failure_count())
+    except Exception:
+        return {"available": False, "emission_failure_count": 0}
+    return {"available": True, "emission_failure_count": count}
+
+
 def _tree_summary(stored_tree: Any) -> Dict[str, Any]:
     if stored_tree is None:
         return {"available": False, "root_count": 0, "node_count": 0}
@@ -123,4 +147,3 @@ def _screenshot_summary(screenshot_store: Any, session_id: str) -> Dict[str, Any
         "copied": False,
         "path_basename": str(path).rsplit("/", maxsplit=1)[-1],
     }
-

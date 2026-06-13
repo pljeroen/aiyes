@@ -328,7 +328,33 @@ def _validate_kind_specific(
         return _validate_scroll_into_view_step(item, path)
     if kind == "assert":
         return _validate_assert_step(item, path)
+    if kind == "find":
+        return _validate_find_step(item, path)
     return ()
+
+
+def _validate_find_step(
+    item: Mapping[str, Any], path: str
+) -> Tuple[ScenarioValidationIssue, ...]:
+    """Validate the optional explicit find required/optional policy (AIYES-103).
+
+    The `required` field opts a find step into REQUIRED behavior. Absence
+    normalizes to OPTIONAL (back-compat). A present value MUST be a JSON/Python
+    bool; a present non-bool value is rejected deterministically with a stable
+    path (steps[i].required) and code (find_required_not_boolean).
+    """
+    if "required" not in item:
+        return ()
+    required = item["required"]
+    if isinstance(required, bool):
+        return ()
+    return (
+        _issue(
+            f"{path}.required",
+            "find_required_not_boolean",
+            "find.required must be a boolean",
+        ),
+    )
 
 
 def _validate_assert_step(

@@ -90,6 +90,7 @@ from aiyes.adapters.scenario_evidence import write_scenario_evidence_bundle  # n
 from aiyes.adapters.scenario_loader import load_scenario_file  # noqa: F401
 from aiyes.adapters.scenario_prerequisites import SystemScenarioPrerequisiteChecker
 from aiyes.adapters.scenario_use_case_executor import ScenarioUseCaseExecutor
+from aiyes.adapters.diagnostic_log import InMemoryDiagnosticLog  # noqa: F401
 from aiyes.adapters.scenario_fixtures import list_public_scenario_fixtures  # noqa: F401
 
 from aiyes.domain.use_cases.session_start import SessionStartUseCase
@@ -147,6 +148,7 @@ _android_capability_probe = AndroidCapabilityProbeAdapter()
 _android_native_scroll = AndroidNativeScrollAdapter()
 _scenario_executor = ScenarioDryRunExecutor()
 _scenario_prerequisite_checker = SystemScenarioPrerequisiteChecker()
+_diagnostic_log = InMemoryDiagnosticLog()
 
 
 # ─── Android adapters (lazy — only instantiated when backend="android") ───
@@ -450,6 +452,7 @@ debug_bundle_uc = DebugBundleUseCase(
     operation_log=_operation_log,
     tree_store=_tree_store,
     screenshot_store=_screenshot_store,
+    diagnostic_log=_diagnostic_log,
 )
 
 wait_stable_uc = WaitStableUseCase(
@@ -634,6 +637,7 @@ _scenario_real_executor = ScenarioUseCaseExecutor(
     native_scroll=_android_native_scroll,
     session_repo=_session_repo,
     clock=_clock,
+    diagnostic_log=_diagnostic_log,
 )
 scenario_real_run_uc = ScenarioRunUseCase(
     executor=_scenario_real_executor,
