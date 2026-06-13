@@ -106,7 +106,10 @@ def test_enabled_harness_runs_target_steps_and_records_passed_evidence() -> None
     assert evidence["status"] == "passed"
     assert len(runner.calls) == len(evidence["steps"])
     assert all(step["status"] == "passed" for step in evidence["steps"])
-    assert any("examples/scenarios/android-settings.json" in step["command"] for step in evidence["steps"])
+    assert any(
+        "examples/scenarios/android-settings.json" in step["command"]
+        for step in evidence["steps"]
+    )
 
 
 def test_enabled_harness_records_failed_step_and_stops() -> None:
@@ -402,6 +405,9 @@ def test_socialzzz_android_records_schema_and_observed_scroll_methods(
         },
         runner=runner,
         now=lambda: "2026-06-05T00:00:00+00:00",
+        # AIYES-107 SUP-2: raw scenario stdout passthrough moved behind the deep
+        # evidence profile; compact (default) excludes it. Assert it on deep.
+        profile="deep",
     )
 
     assert evidence["status"] == "passed"

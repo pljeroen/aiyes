@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from typing import Mapping, Optional
 
+from aiyes.domain import evidence_profile
 from aiyes.domain.use_cases.scenario_run import ScenarioRunResult
 
 
@@ -28,8 +29,24 @@ def write_scenario_evidence_bundle(
     bundle_dir: Path,
     run: ScenarioRunResult,
     environment: Optional[Mapping[str, str]] = None,
+    profile: str = "compact",
+    diagnostic_log: object = None,
 ) -> None:
-    """Write a reviewable scenario evidence bundle."""
+    """Write a reviewable scenario evidence bundle under an evidence profile.
+
+    The compact (default) profile shapes steps.jsonl to exclude raw
+    accessibility-tree payloads while preserving classification fields; deep
+    retains the full per-step output. manifest.json and run.json top-level keys
+    are profile-independent (FC-SERIAL-04).
+
+    A10-CRIT-004: the bundle writer SHAPES only — it does NOT emit LE-02. The
+    single ``evidence.profile.selected`` emission lives at the adapter/command
+    boundary so a run that both writes a bundle and renders the presenter cannot
+    double-emit. ``diagnostic_log`` is accepted for a stable signature but
+    intentionally unused here.
+    """
+    del diagnostic_log  # emission belongs to the boundary, not the bundle writer
+    selected = evidence_profile.normalize_profile(profile)
     bundle_dir.mkdir(parents=True, exist_ok=True)
     artifacts_dir = bundle_dir / "artifacts"
     artifacts_dir.mkdir(exist_ok=True)
@@ -59,7 +76,9 @@ def write_scenario_evidence_bundle(
                 "status": run.status,
                 "mode": run.mode,
                 "failure_code": run.failure_code,
-                "next_actions": [dataclasses.asdict(action) for action in run.next_actions],
+                "next_actions": [
+                    dataclasses.asdict(action) for action in run.next_actions
+                ],
                 "environment": redacted_env,
                 "artifacts_dir": "artifacts",
             },
@@ -69,9 +88,13 @@ def write_scenario_evidence_bundle(
         + "\n",
         encoding="utf-8",
     )
+    raw_steps = [dataclasses.asdict(step) for step in run.steps]
+    shaped_steps = evidence_profile.shape_step_records(
+        raw_steps, selected, run.failure_code
+    )
     with (bundle_dir / "steps.jsonl").open("w", encoding="utf-8") as f:
-        for step in run.steps:
-            f.write(json.dumps(dataclasses.asdict(step), sort_keys=True) + "\n")
+        for shaped in shaped_steps:
+            f.write(json.dumps(shaped, sort_keys=True) + "\n")
     (bundle_dir / "redactions.json").write_text(
         json.dumps(
             {

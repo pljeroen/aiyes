@@ -92,6 +92,10 @@ from aiyes.adapters.scenario_prerequisites import SystemScenarioPrerequisiteChec
 from aiyes.adapters.scenario_use_case_executor import ScenarioUseCaseExecutor
 from aiyes.adapters.diagnostic_log import InMemoryDiagnosticLog  # noqa: F401
 from aiyes.adapters.scenario_fixtures import list_public_scenario_fixtures  # noqa: F401
+from aiyes.domain.evidence_profile import (  # noqa: F401
+    build_profile_selection_event,
+    classified_failure_count,
+)
 
 from aiyes.domain.use_cases.session_start import SessionStartUseCase
 from aiyes.domain.use_cases.session_stop import SessionStopUseCase
@@ -653,6 +657,7 @@ scenario_real_preflight_uc = ScenarioPreflightUseCase(
 # Public exports for CLI instrumentation
 clock = _clock
 operation_log_adapter = _operation_log
+
 
 _session_resolve_uc = SessionResolveUseCase(
     session_repo=_session_repo,

@@ -135,6 +135,45 @@ def _validate_mcp_screenshot_output_path(raw_output: Any) -> Any:
     return raw_output
 
 
+def _resolve_evidence_profile(raw_profile: Any) -> str:
+    """Resolve the MCP scenario_run evidence profile argument (FC-MCP-01).
+
+    Omitting the argument yields the compact default; an out-of-enum value is
+    rejected (ValueError -> isError), never silently coerced.
+    """
+    from aiyes.domain import evidence_profile
+
+    if raw_profile is None:
+        return evidence_profile.COMPACT
+    if not isinstance(raw_profile, str):
+        raise ValueError("profile must be a string")
+    return evidence_profile.normalize_profile(raw_profile)
+
+
+def _emit_mcp_profile_selection(diagnostic_log: Any, result: Any, profile: str) -> None:
+    """Emit exactly one LE-02 evidence.profile.selected event (MCP boundary).
+
+    A10-CRIT-004: the single emission point for the MCP scenario_run handler.
+    Fail-open: a None sink is a no-op; any error is swallowed (the sink owns the
+    observable failure count). Builds the payload via the pure domain shaper.
+    """
+    if diagnostic_log is None:
+        return
+    try:
+        import dataclasses as _dc
+
+        from aiyes.domain import evidence_profile
+
+        raw_steps = [_dc.asdict(step) for step in result.steps]
+        preserved = evidence_profile.classified_failure_count(raw_steps)
+        diagnostic_log.emit_event(
+            evidence_profile.build_profile_selection_event(profile, preserved)
+        )
+    except Exception:
+        # Fail-open: emission must never affect the handler result (FC-OBS-03).
+        pass
+
+
 def _validate_mcp_evidence_dir(raw_dir: Any) -> Any:
     """Validate explicit MCP scenario evidence output directories."""
     if raw_dir is None:
@@ -254,6 +293,7 @@ class ServerDependencies:
     list_public_scenario_fixtures: Any = None
     scenario_validation_preflight_result: Any = None
     scenario_evidence_path_check: Any = None
+    diagnostic_log: Any = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -690,9 +730,7 @@ def _build_dispatch_table(
             )
         delay_ms = args.get("delay_ms", 0)
         _reject_above_max("delay_ms", float(delay_ms), float(_MCP_MAX_DELAY_MS))
-        deps.type_text_uc.execute(
-            session_id, text, delay_ms=delay_ms
-        )
+        deps.type_text_uc.execute(session_id, text, delay_ms=delay_ms)
         return pres().format_status_ok()
 
     def _handle_wait(
@@ -888,6 +926,8 @@ def _build_dispatch_table(
         if not loaded.ok or loaded.scenario is None:
             return pres().format_scenario_validation_errors(loaded.issues)
 
+        profile = _resolve_evidence_profile(args.get("profile", "compact"))
+
         real_execution = bool(args.get("real_execution", args.get("real", False)))
         runner = deps.scenario_real_run_uc if real_execution else deps.scenario_run_uc
         result = runner.execute(loaded.scenario)
@@ -906,8 +946,12 @@ def _build_dispatch_table(
                 )
             ) from exc
         if evidence_dir is not None:
-            deps.write_scenario_evidence_bundle(evidence_dir, result)
-        return pres().format_scenario_run(result)
+            deps.write_scenario_evidence_bundle(evidence_dir, result, profile=profile)
+        rendered = pres().format_scenario_run(result, profile=profile)
+        # A10-CRIT-004: emit LE-02 EXACTLY ONCE at this handler boundary through
+        # the production diagnostic sink (fail-open, None => no emission).
+        _emit_mcp_profile_selection(deps.diagnostic_log, result, profile)
+        return rendered
 
     def _handle_scenario_preflight(
         args: Dict[str, Any], deps: ServerDependencies, session_id: str
@@ -1244,6 +1288,7 @@ def main() -> None:
         list_public_scenario_fixtures=comp_root.list_public_scenario_fixtures,
         scenario_validation_preflight_result=comp_root.scenario_validation_preflight_result,
         scenario_evidence_path_check=comp_root.ScenarioEvidencePathCheck,
+        diagnostic_log=comp_root._diagnostic_log,
     )
 
     wrapper = create_mcp_server(deps)

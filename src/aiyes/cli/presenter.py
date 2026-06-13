@@ -12,6 +12,7 @@ import dataclasses
 import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from aiyes.domain import evidence_profile
 from aiyes.domain.operation_record import MetricsSummary, PruneResult
 from aiyes.domain.output_formatter import node_to_dict, session_to_dict, tree_to_dict
 from aiyes.domain.session import Session
@@ -290,10 +291,30 @@ def format_scenario_fixtures(fixtures: tuple) -> str:
     )
 
 
-def format_scenario_run(result: "ScenarioRunResult") -> str:
-    """Convert ScenarioRunResult to machine-readable JSON."""
+def format_scenario_run(
+    result: "ScenarioRunResult",
+    profile: str = "compact",
+    diagnostic_log: Any = None,
+) -> str:
+    """Convert ScenarioRunResult to machine-readable JSON under a profile.
+
+    The default ``compact`` profile excludes raw accessibility-tree payloads
+    while preserving classification fields; ``deep`` retains the full pre-change
+    detail. Top-level result fields are profile-independent (FC-SERIAL-03).
+
+    A10-CRIT-001/004: the presenter SHAPES only — it does not emit LE-02. The
+    single ``evidence.profile.selected`` emission lives at the adapter/command
+    boundary (CLI scenario-run command, MCP handler) so a bundle-writing run
+    cannot double-emit. The ``diagnostic_log`` parameter is accepted for a
+    stable signature but intentionally unused here.
+    """
+    del diagnostic_log  # emission belongs to the boundary, not the presenter
+    selected = evidence_profile.normalize_profile(profile)
     payload = dataclasses.asdict(result)
-    payload["steps"] = [dataclasses.asdict(step) for step in result.steps]
+    raw_steps = [dataclasses.asdict(step) for step in result.steps]
+    payload["steps"] = evidence_profile.shape_step_records(
+        raw_steps, selected, result.failure_code
+    )
     return json.dumps(payload, indent=2)
 
 

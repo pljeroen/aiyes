@@ -141,9 +141,9 @@ class TestServerDependencies:
             deps.clock = MagicMock()  # type: ignore[misc]
 
     def test_has_39_fields(self) -> None:
-        """BC-26: Exactly 39 fields after reactive wait parity."""
+        """BC-26: Exactly 40 fields after the AIYES-107 diagnostic_log wiring."""
         fields = dataclasses.fields(ServerDependencies)
-        assert len(fields) == 39
+        assert len(fields) == 40
 
     def test_use_case_fields_present(self) -> None:
         """BC-26: Core use case fields are present."""

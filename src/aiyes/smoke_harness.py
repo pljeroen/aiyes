@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from aiyes import __version__ as AIYES_VERSION
+from aiyes.domain import evidence_profile
 
 
 SMOKE_ENABLE_ENV = "AIYES_RUN_REAL_SMOKE"
@@ -395,10 +396,17 @@ def build_evidence(
     enabled: bool,
     environ: Optional[Mapping[str, str]] = None,
     now: Clock = _utc_now,
+    profile: str = "compact",
 ) -> Dict[str, Any]:
-    """Build a skipped evidence bundle without executing commands."""
+    """Build a skipped evidence bundle without executing commands.
+
+    The ``profile`` selection (compact default | deep opt-in) is recorded as a
+    top-level field and governs how step records are shaped when the harness
+    runs (FC-PROFILE-01).
+    """
     if target not in _target_choices():
         raise ValueError(f"unknown smoke target: {target}")
+    selected = evidence_profile.normalize_profile(profile)
     timestamp = now()
     env = os.environ if environ is None else environ
     evidence: Dict[str, Any] = {
@@ -409,6 +417,7 @@ def build_evidence(
         "status": "skipped",
         "started_at": timestamp,
         "finished_at": timestamp,
+        "profile": selected,
     }
     if target == SOCIALZZZ_TARGET:
         evidence.update(
@@ -431,17 +440,42 @@ def build_evidence(
     return evidence
 
 
+def _compact_smoke_step(step: Dict[str, Any]) -> Dict[str, Any]:
+    """Exclude raw stdout/stderr blobs from a smoke step under compact.
+
+    The socialzzz scenario step's raw ``stdout`` embeds the full nested scenario
+    JSON (including inspect trees); compact evidence must not carry it
+    (FC-EVIDENCE-02). The classification residue (status, failure_reason,
+    returncode) is preserved. Deep retains the raw blobs unchanged.
+    """
+    shaped = dict(step)
+    shaped.pop("stdout", None)
+    shaped.pop("stderr", None)
+    return shaped
+
+
+def _shape_smoke_steps(
+    steps: List[Dict[str, Any]], profile: str
+) -> List[Dict[str, Any]]:
+    if profile == evidence_profile.DEEP:
+        return steps
+    return [_compact_smoke_step(step) for step in steps]
+
+
 def _run_socialzzz_android_harness(
     enabled: bool,
     runner: CommandRunner,
     environ: Mapping[str, str],
     now: Clock,
+    profile: str = "compact",
 ) -> Dict[str, Any]:
+    selected = evidence_profile.normalize_profile(profile)
     evidence = build_evidence(
         target=SOCIALZZZ_TARGET,
         enabled=enabled,
         environ=environ,
         now=now,
+        profile=selected,
     )
     if not enabled:
         return evidence
@@ -548,21 +582,72 @@ def _run_socialzzz_android_harness(
     return evidence
 
 
+def _finalize_evidence(
+    evidence: Dict[str, Any],
+    profile: str,
+    diagnostic_log: object,
+) -> Dict[str, Any]:
+    """Shape step records by profile and emit one LE-02 selection event.
+
+    Centralizes compact step-shaping across every smoke return path so all of
+    them exclude the same raw blobs (FC-EVIDENCE-02), and emits exactly one
+    bounded LE-02 evidence.profile.selected event (FC-OBS-01, fail-open).
+    """
+    selected = evidence_profile.normalize_profile(profile)
+    steps = evidence.get("steps")
+    if isinstance(steps, list):
+        evidence["steps"] = _shape_smoke_steps(steps, selected)
+    preserved = (
+        sum(
+            1
+            for step in steps
+            if isinstance(step, dict) and step.get("status") not in (None, "passed")
+        )
+        if isinstance(steps, list)
+        else 0
+    )
+    # A10-CRIT-004: the smoke run is the single LE-02 emission boundary. The
+    # domain shaper builds the payload purely; this adapter drives the sink
+    # exactly once (fail-open; None sink => no emission).
+    if diagnostic_log is not None:
+        try:
+            diagnostic_log.emit_event(
+                evidence_profile.build_profile_selection_event(selected, preserved)
+            )
+        except Exception:
+            # Fail-open: emission must never affect the caller (FC-OBS-03).
+            pass
+    return evidence
+
+
 def run_smoke_harness(
     target: str,
     enabled: bool,
     runner: CommandRunner = _default_runner,
     environ: Optional[Mapping[str, str]] = None,
     now: Clock = _utc_now,
+    profile: str = "compact",
+    diagnostic_log: object = None,
 ) -> Dict[str, Any]:
-    """Run an opt-in smoke target and return a JSON-serializable evidence dict."""
+    """Run an opt-in smoke target and return a JSON-serializable evidence dict.
+
+    Compact (default) evidence excludes raw stdout/stderr blobs from step
+    records; deep retains them. Profile selection emits one bounded LE-02 event
+    when a ``diagnostic_log`` is supplied (fail-open).
+    """
+    selected = evidence_profile.normalize_profile(profile)
     env = os.environ if environ is None else environ
     if target == SOCIALZZZ_TARGET:
-        return _run_socialzzz_android_harness(enabled, runner, env, now)
+        evidence = _run_socialzzz_android_harness(
+            enabled, runner, env, now, profile=selected
+        )
+        return _finalize_evidence(evidence, selected, diagnostic_log)
 
-    evidence = build_evidence(target=target, enabled=enabled, environ=env, now=now)
+    evidence = build_evidence(
+        target=target, enabled=enabled, environ=env, now=now, profile=selected
+    )
     if not enabled:
-        return evidence
+        return _finalize_evidence(evidence, selected, diagnostic_log)
 
     status = "passed"
     steps: List[Dict[str, Any]] = []
@@ -588,7 +673,7 @@ def run_smoke_harness(
     evidence["status"] = status
     evidence["finished_at"] = now()
     evidence["steps"] = steps
-    return evidence
+    return _finalize_evidence(evidence, selected, diagnostic_log)
 
 
 def _parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
@@ -598,6 +683,12 @@ def _parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
     parser.add_argument("--target", choices=_target_choices(), required=True)
     parser.add_argument("--output", default=None)
     parser.add_argument("--run-real", action="store_true")
+    parser.add_argument(
+        "--profile",
+        choices=[evidence_profile.COMPACT, evidence_profile.DEEP],
+        default=evidence_profile.COMPACT,
+        help="Evidence detail profile: compact (default) or deep (raw detail).",
+    )
     return parser.parse_args(argv)
 
 
@@ -616,6 +707,7 @@ def main(
         runner=runner,
         environ=env,
         now=now,
+        profile=args.profile,
     )
     output = json.dumps(evidence, indent=2)
     if args.output:

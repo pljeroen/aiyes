@@ -16,12 +16,15 @@ import click
 from aiyes.cli.composition_root import (  # noqa: F401
     __version__,
     action_uc,
+    build_profile_selection_event,
+    classified_failure_count,
     clipboard_uc,
     clock,
     compound_do_uc,
     diff_uc,
     doctor_uc,
     debug_bundle_uc,
+    _diagnostic_log,
     find_uc,
     format_action,
     format_clipboard_read,
@@ -112,6 +115,30 @@ def _log_operation(
         )
         operation_log_adapter.append(record)
     except Exception:
+        pass
+
+
+def _emit_profile_selection(result: Any, profile: str) -> None:
+    """Emit exactly one LE-02 evidence.profile.selected event (boundary).
+
+    A10-CRIT-004: the sole emission point for the scenario-run command. Builds
+    the LE-02 payload via the pure domain shaper and drives the production
+    diagnostic sink once, even when --evidence-dir also wrote a bundle. The sink
+    owns fail-open; references to the module-level ``_diagnostic_log`` so tests
+    can rebind a fresh production sink.
+
+    Fail-open (FC-OBS-03): a None sink is a no-op; any exception from emit_event
+    is swallowed so the CLI command is never blocked by a diagnostic failure.
+    """
+    if _diagnostic_log is None:
+        return
+    try:
+        raw_steps = [dataclasses.asdict(step) for step in result.steps]
+        preserved = classified_failure_count(raw_steps)
+        selected = profile if profile in ("compact", "deep") else "compact"
+        _diagnostic_log.emit_event(build_profile_selection_event(selected, preserved))
+    except Exception:
+        # Fail-open: emission must never affect the CLI command result (FC-OBS-03).
         pass
 
 
@@ -1630,6 +1657,12 @@ def scenario_group() -> None:
     default=None,
     help="Write a scenario evidence bundle to this directory.",
 )
+@click.option(
+    "--profile",
+    type=click.Choice(["compact", "deep"]),
+    default="compact",
+    help="Evidence detail profile: compact (default) or deep (raw tree detail).",
+)
 @click.argument(
     "scenario_path",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
@@ -1639,6 +1672,7 @@ def scenario_run_cmd(
     real_execution: bool,
     public_fixture: bool,
     evidence_dir: Optional[Path],
+    profile: str,
 ) -> None:
     """Run a deterministic scenario document."""
     t0 = clock.now()
@@ -1653,8 +1687,11 @@ def scenario_run_cmd(
         runner = scenario_real_run_uc if real_execution else scenario_run_uc
         result = runner.execute(loaded.scenario)
         if evidence_dir is not None:
-            write_scenario_evidence_bundle(evidence_dir, result)
-        click.echo(format_scenario_run(result))
+            write_scenario_evidence_bundle(evidence_dir, result, profile=profile)
+        click.echo(format_scenario_run(result, profile=profile))
+        # A10-CRIT-004: emit LE-02 EXACTLY ONCE at this command boundary, even
+        # when --evidence-dir triggers both the bundle writer and the presenter.
+        _emit_profile_selection(result, profile)
         if result.status != "passed":
             exit_code = 1
             sys.exit(1)

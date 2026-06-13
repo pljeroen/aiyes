@@ -211,6 +211,7 @@ _SCENARIO_PARAM_DESCRIPTIONS: Dict[str, Dict[str, str]] = {
         "public_fixture": "Reject private/local references while loading public fixtures.",
         "evidence_dir": "Optional local evidence bundle directory.",
         "scenario_path": "Local JSON scenario file to validate and run.",
+        "profile": "Evidence detail profile: compact (default) or deep.",
     },
     "scenario_preflight": {
         "real_execution": "opt-in readiness check for real GUI/device execution.",
