@@ -309,9 +309,13 @@ def _validate_kind_specific(
     if kind == "sleep":
         return _validate_sleep_step(item, path)
     if kind == "wait":
-        return _validate_wait_step(item, path)
+        return _validate_wait_step(item, path) + _validate_allow_timeout(item, path)
+    if kind == "wait_stable":
+        return _validate_allow_timeout(item, path)
     if kind == "wait_reactive":
-        return _validate_wait_reactive_step(item, path)
+        return _validate_wait_reactive_step(item, path) + _validate_allow_timeout(
+            item, path
+        )
     if kind == "key":
         return _validate_key_step(item, path)
     if kind == "mouse_drag":
@@ -467,6 +471,31 @@ def _validate_wait_step(
                 )
             )
     return tuple(issues)
+
+
+def _validate_allow_timeout(
+    item: Mapping[str, Any], path: str
+) -> Tuple[ScenarioValidationIssue, ...]:
+    """Validate the optional wait-family observational timeout opt-in (AIYES-104).
+
+    The `allow_timeout` field opts a wait / wait_stable / wait_reactive step
+    into observational (non-failing) timeout behavior (OD-02). Absence
+    normalizes to the default-fail policy. A present value MUST be a JSON/Python
+    bool; a present non-bool value is rejected deterministically with a stable
+    path (steps[i].allow_timeout) and code (wait_allow_timeout_invalid).
+    """
+    if "allow_timeout" not in item:
+        return ()
+    allow_timeout = item["allow_timeout"]
+    if isinstance(allow_timeout, bool):
+        return ()
+    return (
+        _issue(
+            f"{path}.allow_timeout",
+            "wait_allow_timeout_invalid",
+            "wait.allow_timeout must be a boolean",
+        ),
+    )
 
 
 def _validate_wait_reactive_step(

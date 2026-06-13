@@ -125,8 +125,13 @@ def test_wait_step_uses_defaults_when_optional_parameters_omitted() -> None:
     assert call["transient"] is False
 
 
-def test_wait_step_surfaces_timeout_as_passed_with_found_false() -> None:
-    """Timeout is not an error per WaitUseCase semantics (exit 0)."""
+def test_wait_step_surfaces_timeout_as_failed_with_found_false() -> None:
+    """A wait timeout fails the scenario step by default (AIYES-104 supersession).
+
+    Pre-AIYES-104 this surfaced as passed; AIYES-104-R1 reverses the default so a
+    timeout fails by default while the timeout output (found=false, timeout=true)
+    is preserved verbatim.
+    """
     wait = RecordingUseCase(
         SimpleNamespace(found=False, timeout=True, id=None, transient=False)
     )
@@ -138,7 +143,7 @@ def test_wait_step_surfaces_timeout_as_passed_with_found_false() -> None:
         )
     )
 
-    assert result.status == "passed"
+    assert result.status == "failed"
     assert result.output["found"] is False
     assert result.output["timeout"] is True
 
@@ -220,8 +225,13 @@ def test_wait_stable_step_uses_defaults_when_optional_parameters_omitted() -> No
     assert call["ignore_ids"] == frozenset()
 
 
-def test_wait_stable_timeout_surfaces_as_passed_with_stable_false() -> None:
-    """Timeout is observable in output, not an executor error."""
+def test_wait_stable_timeout_surfaces_as_failed_with_stable_false() -> None:
+    """A wait_stable timeout fails the step by default (AIYES-104 supersession).
+
+    Pre-AIYES-104 this surfaced as passed; AIYES-104-R1 reverses the default so a
+    timeout fails by default while stable=false, timeout=true, polls, changes,
+    and comparison metadata are preserved verbatim in the output.
+    """
     wait_stable = RecordingUseCase(
         SimpleNamespace(
             stable=False, timeout=True, polls=2, changes=(), comparison_mode="node_id"
@@ -233,7 +243,7 @@ def test_wait_stable_timeout_surfaces_as_passed_with_stable_false() -> None:
         ScenarioStep(id="stable_t", kind="wait_stable", parameters={"timeout": 0.05})
     )
 
-    assert result.status == "passed"
+    assert result.status == "failed"
     assert result.output["stable"] is False
     assert result.output["timeout"] is True
 

@@ -80,6 +80,25 @@ Real GUI/device runs should remain opt-in and prerequisite-gated. Missing `gedit
 Linux accessibility dependencies, `adb`, or an emulator should produce skip
 evidence rather than a misleading pass.
 
+## Wait Timeout Policy
+
+Scenario `wait`, `wait_stable`, and `wait_reactive` steps fail the scenario step
+by default when they time out (or, for `wait_reactive`, end in an unmatched
+terminal outcome). A step that does not get what it waited for is a real signal:
+treating a timeout as a failure aligns the scenario result with the author's
+intent — the scenario exists to catch regressions, so a wait that never
+succeeded should not be reported as a passing step.
+
+To record a timeout as a non-failing observation instead, set the single
+explicit boolean opt-in `allow_timeout: true` on the wait-family step. With
+`allow_timeout: true` the step keeps a timeout as a passed observation; absence
+of the field (or `allow_timeout: false`) is the default-fail policy. The
+`allow_timeout` value is validated at scenario load time and must be a boolean.
+
+This policy is scoped to scenario-step classification only. It does not change
+the direct CLI or MCP `wait` exit semantics, which still report a timeout as a
+non-error (exit 0) outcome on the standalone command surface.
+
 ## MCP Parity
 
 MCP exposes the same release-scenario surfaces as the CLI:

@@ -23,6 +23,25 @@ _SELECTOR_DIAGNOSTIC_LIMIT = 5
 _FC_EMPTY_SOURCE_NODE_ID = "empty_source_node_id"
 _FC_REQUIRED_FIND_NO_NODES = "required_find_no_nodes"
 
+# AIYES-104 stable step-level wait-family timeout classification code.
+_FC_STEP_TIMEOUT = "step_timeout"
+
+# AIYES-104 wait-family kinds subject to timeout classification.
+_WAIT_FAMILY_KINDS = frozenset(("wait", "wait_stable", "wait_reactive"))
+
+# AIYES-104 terminal failure_code set for wait_reactive unmatched-terminal
+# classification (FORMAL_CONSTRAINT_MAP FC-WAIT-03 / domain ReactiveWaitResult
+# _VALID_FAILURE_CODES).
+_REACTIVE_TERMINAL_FAILURE_CODES = frozenset(
+    (
+        "timeout",
+        "unsupported_condition",
+        "observer_error",
+        "invalid_pattern",
+        "session_not_found",
+    )
+)
+
 # OD-03: diagnostic_summary is a single line truncated at 200 chars.
 _SUMMARY_MAX_LEN = 200
 
@@ -113,12 +132,71 @@ class ScenarioUseCaseExecutor:
             )
 
         self._outputs[step.id] = output
+
+        if step.kind in _WAIT_FAMILY_KINDS and self._is_wait_family_failure(
+            step, output
+        ):
+            self._emit_classification(
+                step.id,
+                _FC_STEP_TIMEOUT,
+                self._wait_family_summary(step, output),
+                contract_id="AIYES-104",
+            )
+            # FC-PRESERVE-08 / RISK-4: status changes only; the original jsonable
+            # output mapping is returned verbatim (no key added, dropped, or
+            # mutated), so the failed step surfaces the same output as a pass.
+            return ScenarioStepExecutionResult(
+                step_id=step.id,
+                status="failed",
+                output=output,
+                error=_FC_STEP_TIMEOUT,
+                session_id=session_id,
+            )
+
         return ScenarioStepExecutionResult(
             step_id=step.id,
             status="passed",
             output=output,
             error="",
             session_id=session_id,
+        )
+
+    @staticmethod
+    def _is_wait_family_failure(step: ScenarioStep, output: Any) -> bool:
+        """Classify a wait-family timeout / unmatched-terminal as a failure.
+
+        AIYES-104 (FC-WAIT-01/02/03, FC-POLICY-04/05, FC-WAIT-07): a wait,
+        wait_stable, or wait_reactive step whose output is a timeout
+        (output["timeout"] is True) — or, for wait_reactive, an unmatched
+        terminal failure (matched is False AND failure_code in the closed
+        terminal set) — fails by default. The single explicit boolean opt-in
+        ``allow_timeout: true`` (OD-02) keeps such an output a passed
+        observation. A satisfied/matched result (no timeout, no unmatched
+        terminal) always stays passed.
+        """
+        if not isinstance(output, Mapping):
+            return False
+        if step.parameters.get("allow_timeout") is True:
+            return False
+        if output.get("timeout") is True:
+            return True
+        if step.kind == "wait_reactive":
+            return (
+                output.get("matched") is False
+                and output.get("failure_code") in _REACTIVE_TERMINAL_FAILURE_CODES
+            )
+        return False
+
+    @staticmethod
+    def _wait_family_summary(step: ScenarioStep, output: Mapping[str, Any]) -> str:
+        failure_code = output.get("failure_code")
+        if failure_code:
+            return (
+                f"wait-family step {step.id!r} ({step.kind}) classified failed "
+                f"(failure_code={failure_code!r})"
+            )
+        return (
+            f"wait-family step {step.id!r} ({step.kind}) classified failed on timeout"
         )
 
     def _execute_find(self, step: ScenarioStep) -> ScenarioStepExecutionResult:
@@ -292,7 +370,11 @@ class ScenarioUseCaseExecutor:
         )
 
     def _emit_classification(
-        self, step_id: str, failure_code: str, summary: str
+        self,
+        step_id: str,
+        failure_code: str,
+        summary: str,
+        contract_id: str = "AIYES-103",
     ) -> None:
         """Emit one LE-01 event, fail-open (FC-OBS-01/02). Never raises.
 
@@ -301,6 +383,9 @@ class ScenarioUseCaseExecutor:
         here is defense-in-depth only — it guarantees a non-conforming sink can
         never break the step/run outcome; it deliberately does NOT touch the
         count, which the conforming production sink owns.
+
+        ``contract_id`` identifies the slice that classified the failure
+        (AIYES-103 find/action policy, AIYES-104 wait-family timeout policy).
         """
         log = self._diagnostic_log
         if log is None:
@@ -311,7 +396,7 @@ class ScenarioUseCaseExecutor:
             log.emit_event(
                 DiagnosticEvent(
                     action="scenario.diagnostic.failure_classified",
-                    contract_id="AIYES-103",
+                    contract_id=contract_id,
                     step_id=step_id,
                     failure_code=failure_code,
                     diagnostic_summary=_bounded_summary(summary),
