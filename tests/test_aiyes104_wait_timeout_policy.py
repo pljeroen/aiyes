@@ -650,18 +650,24 @@ def _wait_timeout_run() -> Any:
     return ScenarioRunUseCase(executor=executor).execute(validated.scenario)
 
 
-def test_top_level_failure_code_stays_executor_error() -> None:
-    """FC-FAILCODE-12: a failed wait-timeout step yields run.status==failed and
-    the UNCHANGED top-level failure_code "executor_error"; step_timeout lives
-    only at step level (the LE-01 event), never on the run result."""
+def test_top_level_failure_code_is_step_timeout() -> None:
+    """AIYES-108 FC-FAILCODE-13: a failed wait-timeout step yields
+    run.status==failed and the top-level failure_code "step_timeout".
+
+    SUPERSEDES AIYES-104 FC-FAILCODE-12 (authorized, SUP-108-1): the prior pin
+    asserted run.failure_code == "executor_error" for a wait-timeout run; that pin
+    is explicitly lifted by AIYES-108, which promotes the step-level step_timeout
+    classification to the top-level failure_code so evidence consumers reading
+    only the top-level code can distinguish a wait-timeout run from a generic
+    executor failure. The step-level error remains "step_timeout" (unchanged)."""
     run = _wait_timeout_run()
 
     assert run.status == "failed"
-    assert run.failure_code == "executor_error"
+    assert run.failure_code == _STEP_TIMEOUT_CODE
     failing = next(s for s in run.steps if s.step_id == "w")
     assert failing.status == "failed"
-    # The step-level step_timeout code is NOT promoted to the run failure_code.
-    assert run.failure_code != _STEP_TIMEOUT_CODE
+    # The step-level step_timeout code IS now promoted to the run failure_code.
+    assert run.failure_code != "executor_error"
 
 
 # =====================================================================

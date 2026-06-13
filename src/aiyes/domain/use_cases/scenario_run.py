@@ -99,7 +99,7 @@ class ScenarioRunUseCase:
                 session_started = True
             if executed.status != "passed":
                 status = "failed" if executed.status != "skipped" else "skipped"
-                failure_code = _failure_code(step.kind, executed.status)
+                failure_code = _failure_code(step.kind, executed.status, executed.error)
                 if session_started:
                     results.extend(self._run_cleanup(scenario))
                 return ScenarioRunResult(
@@ -108,7 +108,9 @@ class ScenarioRunUseCase:
                     steps=tuple(results),
                     mode=self._mode,
                     failure_code=failure_code,
-                    next_actions=_next_actions_for_failure(failure_code, executed.error),
+                    next_actions=_next_actions_for_failure(
+                        failure_code, executed.error
+                    ),
                 )
 
         if session_started:
@@ -188,11 +190,13 @@ def _record_step(
     )
 
 
-def _failure_code(kind: str, status: str) -> str:
+def _failure_code(kind: str, status: str, error: str = "") -> str:
     if status == "skipped":
         return "prerequisite_missing"
     if kind == "assert":
         return "assertion_failed"
+    if error == "step_timeout":
+        return "step_timeout"
     return "executor_error"
 
 
@@ -210,7 +214,8 @@ def _next_actions_for_failure(
         return (
             ScenarioNextAction(
                 code="install_prerequisite",
-                message=error or "Install or start the missing prerequisite, then rerun.",
+                message=error
+                or "Install or start the missing prerequisite, then rerun.",
             ),
         )
     return (
