@@ -5,12 +5,13 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from typing import Any, Optional
 
-from aiyes.domain.matching import name_matches
+from aiyes.domain.matching import name_matches, normalize_whitespace
 from aiyes.domain.scenario import _VALID_DIRECTIONS, ScenarioStep
 from aiyes.domain.scenario_assertions import evaluate_scenario_assertion
 from aiyes.domain.tree import AccessibilityTree, flatten_nodes
@@ -45,12 +46,54 @@ _REACTIVE_TERMINAL_FAILURE_CODES = frozenset(
 # OD-03: diagnostic_summary is a single line truncated at 200 chars.
 _SUMMARY_MAX_LEN = 200
 
+# AIYES-105 near-name token-overlap threshold (CANON_REQ_PKG AIYES-105-CLAR-01).
+_NEAR_NAME_OVERLAP_THRESHOLD = 0.5
+
+# AIYES-105 exact summary markers (OD-03 / FC-SUMMARY-02 / FC-SUMMARY-03).
+_SUMMARY_AFFIRMATIVE_MARKER = "near-name candidate(s) found"
+_SUMMARY_NEGATIVE_PHRASE = "no near-name candidates found"
+
+# AIYES-105 stable classified failure code for role-drift selector failures.
+_FC_ROLE_DRIFT = "selector_role_drift"
+
+# AIYES-105 token split on non-alphanumeric boundaries.
+_TOKEN_SPLIT = re.compile(r"[^0-9A-Za-z]+")
+
 
 def _bounded_summary(summary: object) -> str:
     """Single line truncated to SUMMARY_MAX_LEN; "" when no text (OD-03)."""
     if not isinstance(summary, str) or not summary:
         return ""
     return summary.splitlines()[0][:_SUMMARY_MAX_LEN]
+
+
+def near_name(name: str, pattern: str) -> bool:
+    """Diagnostic-only near-name predicate (FC-NEARNAME-01).
+
+    Casefold + whitespace-normalize both sides. A near-name match holds iff
+    either side contains the other OR the token overlap is at least
+    ``_NEAR_NAME_OVERLAP_THRESHOLD`` (denominator = the smaller token set).
+    Tokens split on non-alphanumeric boundaries; empty tokens discarded. An
+    empty normalized side OR an empty token set yields ``False`` (no
+    div-by-zero, no match-all).
+
+    This predicate is DIAGNOSTIC-ONLY and MUST NOT be used for real find /
+    name_matches behavior (FC-FINDPURE-01). It reuses
+    ``normalize_whitespace`` but does not alter it.
+    """
+    n = normalize_whitespace(name).casefold()
+    p = normalize_whitespace(pattern).casefold()
+    if n == "" or p == "":
+        return False
+    tn = {t for t in _TOKEN_SPLIT.split(n) if t}
+    tp = {t for t in _TOKEN_SPLIT.split(p) if t}
+    if not tn or not tp:
+        return False
+    if (p in n) or (n in p):
+        return True
+    inter = len(tn & tp)
+    denom = min(len(tn), len(tp))
+    return (inter / denom) >= _NEAR_NAME_OVERLAP_THRESHOLD
 
 
 class ScenarioUseCaseExecutor:
@@ -783,6 +826,20 @@ class ScenarioUseCaseExecutor:
             error = "scroll_into_view_role_drift_ambiguous"
         else:
             error = "scroll_into_view_role_drift_no_actionable_candidate"
+        # AIYES-105 (FC-OBS-01): emit exactly one LE-01 for this classified
+        # role-drift selector failure, carrying the bounded near-name summary.
+        selector_diagnostics = output.get("selector_diagnostics")
+        summary = (
+            selector_diagnostics.get("summary", "")
+            if isinstance(selector_diagnostics, Mapping)
+            else ""
+        )
+        self._emit_classification(
+            step_id,
+            _FC_ROLE_DRIFT,
+            summary,
+            contract_id="AIYES-105",
+        )
         return ScenarioStepExecutionResult(
             step_id=step_id,
             status="failed",
@@ -1607,8 +1664,18 @@ def _selector_diagnostics_from_nodes(
         if candidate is not None:
             candidates.append(candidate)
 
-    candidates.sort(key=_selector_candidate_sort_key)
+    # AIYES-105 (FC-RANK-01/02/03): classify the FULL candidate set on the
+    # requested name_pattern, then sort with class_rank (exact/near before
+    # unrelated) as the primary key BEFORE applying the bound, so a near-name
+    # candidate is never hidden behind an unrelated same-role one. The existing
+    # tie-breaks (reason_count, actionable_penalty, node_id) are retained as
+    # lower-priority keys, terminating in node_id for a deterministic total order.
+    candidates.sort(key=lambda c: _selector_candidate_sort_key(c, name_pattern))
     bounded = candidates[:_SELECTOR_DIAGNOSTIC_LIMIT]
+    # AIYES-105 (FC-SUMMARY-04): near-name existence sourced from the FULL set.
+    has_near_name = any(
+        near_name(candidate.get("name", ""), name_pattern) for candidate in candidates
+    )
     diagnostics: dict[str, Any] = {
         "requested_selector": {
             "role": requested_role,
@@ -1617,12 +1684,27 @@ def _selector_diagnostics_from_nodes(
         },
         "candidate_count": len(candidates),
         "max_candidates": _SELECTOR_DIAGNOSTIC_LIMIT,
+        # AIYES-105 (FC-SUMMARY-01/05): top-level single-line summary precedes
+        # raw candidate detail; bounded to SUMMARY_MAX_LEN.
+        "summary": _selector_summary(has_near_name),
         "candidates": bounded,
     }
     hint = _selector_hint(requested_role, name_pattern, candidates)
     if hint:
         diagnostics["hint"] = hint
     return diagnostics
+
+
+def _selector_summary(has_near_name: bool) -> str:
+    """First-line near-name summary (FC-SUMMARY-01/02/03/05).
+
+    Single line, bounded to SUMMARY_MAX_LEN. Contains the EXACT affirmative
+    marker when a near-name candidate exists in the full classified set, the
+    EXACT negative phrase otherwise.
+    """
+    if has_near_name:
+        return _bounded_summary(f"selector diagnostics: {_SUMMARY_AFFIRMATIVE_MARKER}")
+    return _bounded_summary(f"selector diagnostics: {_SUMMARY_NEGATIVE_PHRASE}")
 
 
 def _selector_candidate_diagnostic(
@@ -1664,13 +1746,25 @@ def _selector_candidate_diagnostic(
     }
 
 
-def _selector_candidate_sort_key(candidate: Mapping[str, Any]) -> tuple[int, int, str]:
+def _selector_candidate_sort_key(
+    candidate: Mapping[str, Any], name_pattern: str = ""
+) -> tuple[int, int, int, str]:
+    # AIYES-105 (FC-RANK-03): class_rank is the primary key — 0 for an
+    # exact-name or near-name candidate (near subsumes exact, FC-NEARNAME-01),
+    # 1 for an unrelated same-role candidate. The existing deterministic
+    # tie-breaks follow, terminating in node_id for a total order.
+    class_rank = 0 if near_name(str(candidate.get("name", "")), name_pattern) else 1
     reasons = candidate.get("reasons", ())
     if not isinstance(reasons, Sequence) or isinstance(reasons, (str, bytes)):
         reasons = ()
     reason_count = len(reasons)
     actionable_penalty = 0 if candidate.get("actionable") is True else 1
-    return (reason_count, actionable_penalty, str(candidate.get("node_id", "")))
+    return (
+        class_rank,
+        reason_count,
+        actionable_penalty,
+        str(candidate.get("node_id", "")),
+    )
 
 
 def _selector_hint(
