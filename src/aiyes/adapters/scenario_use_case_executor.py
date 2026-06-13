@@ -893,6 +893,22 @@ class ScenarioUseCaseExecutor:
         }
         if selector_diagnostics is not None:
             output["selector_diagnostics"] = selector_diagnostics
+        if failure_class == "no_scrollable" and progress == "unchanged":
+            # AIYES-106: read-only over the already-computed failure evidence —
+            # attach app-side accessibility-exposure guidance and emit LE-01.
+            output["guidance"] = _no_scrollable_exposure_guidance(
+                failure_class=failure_class,
+                progress=progress,
+                attempts=attempts,
+                direction=direction,
+                viewport=viewport,
+            )
+            self._emit_classification(
+                step_id,
+                "no_scrollable",
+                output["guidance"]["summary"],
+                contract_id="AIYES-106",
+            )
         self._outputs[step_id] = output
         return ScenarioStepExecutionResult(
             step_id=step_id,
@@ -1862,6 +1878,46 @@ def _final_scroll_progress(scroll_attempts: list[dict[str, Any]]) -> str:
     if all(progress == "unknown" for progress in progress_values):
         return "unknown"
     return "unknown"
+
+
+def _no_scrollable_exposure_guidance(
+    *,
+    failure_class: str,
+    progress: str,
+    attempts: int,
+    direction: str,
+    viewport: tuple[int, int],
+) -> dict[str, Any]:
+    """Build the AIYES-106 app-side accessibility-exposure guidance block.
+
+    Read-only over the already-computed failure evidence (FC-DIAG-07): the
+    guidance carries only permitted scalar facts (failure_class, progress,
+    attempts, direction, viewport, the null selected_scrollable_id, and the
+    tree-fingerprint-equality flag) — never a raw tree, screenshot, or
+    coordinate payload (FC-DIAG-06). Causality is hedged and the step stays a
+    failure (FC-DIAG-08). Bounded to GUIDANCE_MAX_BYTES (FC-DIAG-06, OD-04).
+    """
+    return {
+        "kind": "no_scrollable_accessibility_exposure",
+        "summary": (
+            "No accessible scrollable region appears to have been exposed: "
+            "every scroll attempt fell back to a raw viewport swipe and the "
+            "accessibility tree did not change. This likely points to an "
+            "app-side accessibility-exposure gap to investigate."
+        ),
+        "recommended_action": (
+            "Investigate the app/widget tree: expose a scrollable container "
+            "(e.g. a Scrollable / SemanticsScrollable) with scroll semantics "
+            "so assistive tooling can discover and drive it."
+        ),
+        "step_outcome": "failed",
+        "failure_class": failure_class,
+        "progress": progress,
+        "attempts": attempts,
+        "direction": direction,
+        "viewport": list(viewport),
+        "selected_scrollable_id": None,
+    }
 
 
 def _scroll_failure_class(
