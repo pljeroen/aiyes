@@ -165,13 +165,25 @@ def format_find_nodes(nodes: List[FoundNode]) -> str:
 def format_screenshot(
     path: Optional[str] = None,
     data: Optional[str] = None,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
 ) -> str:
-    """Convert screenshot result to JSON string."""
+    """Convert screenshot result to JSON string.
+
+    width/height are the returned image's actual pixel dimensions (post-crop
+    for a region/node crop). Following the conditional-key-add pattern, the
+    "width"/"height" keys are OMITTED entirely when None — never emitted as
+    null or 0 — so existing {path, data} callers get byte-identical JSON.
+    """
     result: Dict[str, Any] = {}
     if path is not None:
         result["path"] = path
     if data is not None:
         result["data"] = data
+    if width is not None:
+        result["width"] = width
+    if height is not None:
+        result["height"] = height
     return json.dumps(result, indent=2)
 
 

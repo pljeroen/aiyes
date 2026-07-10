@@ -705,7 +705,14 @@ def screenshot_cmd(
             region=region,
             node_id=node_id,
         )
-        click.echo(format_screenshot(path=result.path, data=result.data))
+        click.echo(
+            format_screenshot(
+                path=result.path,
+                data=result.data,
+                width=result.width,
+                height=result.height,
+            )
+        )
     except Exception as exc:
         exit_code = 1
         error = str(exc)

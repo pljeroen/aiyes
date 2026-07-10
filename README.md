@@ -21,6 +21,18 @@ session stop                      # clean up
 
 All commands return JSON to stdout. Errors go to stderr. Designed for machine consumption.
 
+The `screenshot` response also carries `width` and `height` — the returned image's actual pixel dimensions (post-crop for a `--region`/`--node` capture, read from the returned file's own bytes, not the device/display size):
+
+```json
+{
+  "path": "/home/user/.aieyes/<session-id>/screenshot.png",
+  "width": 1280,
+  "height": 800
+}
+```
+
+The `width`/`height` keys are omitted when the dimensions cannot be read from the returned file's bytes (an unrecognized image format).
+
 ## 5-minute success path
 
 Install and verify local dependencies:

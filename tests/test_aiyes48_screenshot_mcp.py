@@ -56,6 +56,11 @@ class ByteTrackingScreenshotStore:
         self.calls: List[Tuple[str, Any]] = []
         self._paths: Dict[str, str] = {}
         self.bytes_by_path: Dict[str, bytes] = {}
+        # Content-scoped dimension registry: maps a byte-blob -> (width, height).
+        # read_dimensions resolves the CURRENT bytes at a path through this map,
+        # so a crop that rewrites those bytes changes the reported dims
+        # (proves the post-crop read for AIYES-111 R2). Unregistered bytes -> None.
+        self.dims_by_bytes: Dict[bytes, Tuple[int, int]] = {}
         self.initial_bytes = initial_bytes
 
     def save_screenshot(self, session_id: str, source_path: str) -> str:
@@ -74,6 +79,17 @@ class ByteTrackingScreenshotStore:
     def read_screenshot_bytes(self, session_id: str) -> bytes:
         self.calls.append(("read_screenshot_bytes", session_id))
         return self.bytes_by_path[self._paths[session_id]]
+
+    def read_dimensions(self, path: str) -> Optional[Tuple[int, int]]:
+        """Map the CURRENT bytes at ``path`` to registered dims (content-scoped).
+
+        Returns the dims registered for whatever bytes currently live at
+        ``path`` (so a crop rewriting those bytes changes the answer); None
+        for absent/unregistered bytes (the AIYES-111 degrade sentinel).
+        """
+        self.calls.append(("read_dimensions", path))
+        data = self.bytes_by_path.get(path)
+        return self.dims_by_bytes.get(data)
 
     def delete_temp(self, path: str) -> None:
         self.calls.append(("delete_temp", path))

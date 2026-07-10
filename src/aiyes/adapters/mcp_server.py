@@ -646,7 +646,12 @@ def _build_dispatch_table(
             region=region,
             node_id=args.get("node_id"),
         )
-        return pres().format_screenshot(path=result.path, data=result.data)
+        return pres().format_screenshot(
+            path=result.path,
+            data=result.data,
+            width=result.width,
+            height=result.height,
+        )
 
     def _handle_action(
         args: Dict[str, Any], deps: ServerDependencies, session_id: str

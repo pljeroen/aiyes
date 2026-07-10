@@ -185,11 +185,22 @@ class FakeTreeStore:
 
 
 class FakeScreenshotStore:
-    """Fake for ScreenshotStorePort."""
+    """Fake for ScreenshotStorePort.
 
-    def __init__(self, fake_bytes: bytes = b"fake-png-data") -> None:
+    ``dimensions`` configures what ``read_dimensions`` returns for any path.
+    It defaults to ``None`` so every existing execute()-driven test keeps its
+    behavior unchanged (the domain omits width/height when read_dimensions
+    yields None); AIYES-111 tests inject a controlled (width, height).
+    """
+
+    def __init__(
+        self,
+        fake_bytes: bytes = b"fake-png-data",
+        dimensions: Optional[Tuple[int, int]] = None,
+    ) -> None:
         self._paths: Dict[str, str] = {}
         self._fake_bytes = fake_bytes
+        self._dimensions = dimensions
         self.calls: List[Tuple[str, Any]] = []
 
     def save_screenshot(self, session_id: str, source_path: str) -> str:
@@ -207,6 +218,15 @@ class FakeScreenshotStore:
     def read_screenshot_bytes(self, session_id: str) -> bytes:
         self.calls.append(("read_screenshot_bytes", session_id))
         return self._fake_bytes
+
+    def read_dimensions(self, path: str) -> Optional[Tuple[int, int]]:
+        """Return the configured (width, height) for any path, else None.
+
+        None is the degrade sentinel (AIYES-111): the domain leaves
+        width/height unset and the presenter omits the keys.
+        """
+        self.calls.append(("read_dimensions", path))
+        return self._dimensions
 
     def delete_temp(self, path: str) -> None:
         self.calls.append(("delete_temp", path))

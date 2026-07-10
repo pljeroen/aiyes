@@ -20,6 +20,8 @@ class ScreenshotResult:
 
     path: Optional[str]
     data: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
 
 
 def _validate_region(region: Tuple[int, int, int, int]) -> None:
@@ -101,21 +103,30 @@ class ScreenshotUseCase:
                     self._crop.crop(output_path, x, y, w, h, output_path)
 
             if base64:
-                # Read the file bytes and encode to base64
+                # Read the file bytes and encode to base64. Dimensions are
+                # bound to the EXACT file that was encoded (C1a): there is no
+                # path to cross-check against, so read them from the same file
+                # read_screenshot_bytes reads.
+                encoded_path = self._screenshot_store.get_screenshot_path(session_id)
                 raw_bytes = self._screenshot_store.read_screenshot_bytes(session_id)
                 encoded = base64_mod.b64encode(raw_bytes).decode("ascii")
+                width, height = self._read_dimensions(encoded_path)
                 return ScreenshotResult(
                     path=None,
                     data=encoded,
+                    width=width,
+                    height=height,
                 )
 
             # If caller requested a specific output path, return that path
             if output_path is not None:
-                return ScreenshotResult(path=output_path)
+                width, height = self._read_dimensions(output_path)
+                return ScreenshotResult(path=output_path, width=width, height=height)
 
             # Otherwise return the store path
             store_path = self._screenshot_store.get_screenshot_path(session_id)
-            return ScreenshotResult(path=store_path)
+            width, height = self._read_dimensions(store_path)
+            return ScreenshotResult(path=store_path, width=width, height=height)
         finally:
             # Clean up temp file created by screenshot port
             if output_path is None and raw_path is not None:
@@ -123,6 +134,19 @@ class ScreenshotUseCase:
                     self._screenshot_store.delete_temp(raw_path)
                 except OSError:
                     pass
+
+    def _read_dimensions(self, path: str) -> Tuple[Optional[int], Optional[int]]:
+        """Read (width, height) of the returned file via the store port.
+
+        The store returns None when dimensions are unavailable (unrecognized
+        format, corrupt/truncated header, missing file); we map that to
+        (None, None) so the result carries no fabricated dims. The domain does
+        NO raw file I/O — the byte read lives behind ScreenshotStorePort.
+        """
+        dims = self._screenshot_store.read_dimensions(path)
+        if dims is None:
+            return (None, None)
+        return (dims[0], dims[1])
 
     def _resolve_node_bounds(
         self, session_id: str, node_id: str

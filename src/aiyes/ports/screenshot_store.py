@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Optional, Protocol, Tuple
 
 
 class ScreenshotStorePort(Protocol):
@@ -18,6 +18,15 @@ class ScreenshotStorePort(Protocol):
 
     def read_screenshot_bytes(self, session_id: str) -> bytes:
         """Read the saved screenshot file as raw bytes."""
+        ...
+
+    def read_dimensions(self, path: str) -> Optional[Tuple[int, int]]:
+        """Read the image's (width, height) in pixels from its encoded bytes.
+
+        Returns None when dimensions are unavailable — unrecognized magic
+        bytes, a truncated/corrupt header, or a missing file. None is the
+        degrade sentinel; expected degradation MUST NOT raise.
+        """
         ...
 
     def delete_temp(self, path: str) -> None:
