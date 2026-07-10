@@ -165,6 +165,57 @@ def flatten_nodes(nodes: Tuple[Node, ...]) -> List[Node]:
     return result
 
 
+def locate_ancestor_nodes(
+    nodes: List[Node],
+    within_role: Optional[str],
+    within_name: Optional[str],
+) -> List[Node]:
+    """Return the nodes matching an optional ancestor/section scope spec.
+
+    Filters an already-flattened node list (e.g. flatten_nodes(tree.roots)) by
+    two independent optional predicates:
+
+    - ``within_role``: exact ``node.role == within_role`` match, when given.
+    - ``within_name``: substring/case-insensitive/whitespace-normalized match
+      via the existing ``name_matches`` matcher, when given.
+
+    When both are given the ancestor must satisfy BOTH (AND-ed). A ``None``
+    predicate does not constrain. Returns matches in the input (pre-order,
+    document) order; ``[]`` when nothing matches. Pure — stdlib + domain only.
+    """
+    from aiyes.domain.matching import name_matches
+
+    matches: List[Node] = []
+    for node in nodes:
+        if within_role is not None and node.role != within_role:
+            continue
+        if within_name is not None and not name_matches(node.name, within_name):
+            continue
+        matches.append(node)
+    return matches
+
+
+def flatten_scoped_subtrees(ancestors: List[Node]) -> List[Node]:
+    """Flatten the DESCENDANTS of each matched ancestor, deduped by node id.
+
+    For every ancestor (in input order) this flattens ``ancestor.children``
+    (the ancestor node itself is the scope boundary and is EXCLUDED from the
+    candidate pool). Nodes are deduplicated by ``node.id`` preserving first-seen
+    order, so nested/overlapping ancestor matches (one matched ancestor inside
+    another) yield each descendant exactly once in stable pre-order. Pure — no
+    I/O, stdlib + domain only.
+    """
+    result: List[Node] = []
+    seen: Set[str] = set()
+    for ancestor in ancestors:
+        for descendant in flatten_nodes(ancestor.children):
+            if descendant.id in seen:
+                continue
+            seen.add(descendant.id)
+            result.append(descendant)
+    return result
+
+
 @dataclasses.dataclass(frozen=True)
 class TreeDiff:
     """A single difference between two trees."""

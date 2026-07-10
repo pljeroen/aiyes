@@ -19,7 +19,7 @@ from aiyes.domain.session import Session
 from aiyes.domain.tree import AccessibilityTree
 from aiyes.domain.use_cases.compound_do import CompoundDoResult
 from aiyes.domain.use_cases.diff import DiffResult
-from aiyes.domain.use_cases.find import FoundNode
+from aiyes.domain.use_cases.find import FindResult, FoundNode
 from aiyes.domain.use_cases.inspect import InspectDiagnostic
 from aiyes.domain.reactive_wait import ReactiveWaitResult
 from aiyes.domain.use_cases.session_capabilities import SessionCapabilitiesResult
@@ -138,10 +138,17 @@ def format_find(nodes: List[Dict[str, Any]]) -> str:
     return json.dumps(nodes, indent=2)
 
 
-def format_find_nodes(nodes: List[FoundNode]) -> str:
-    """Convert domain find result nodes to masked JSON string.
+def format_find_nodes(result: "FindResult | List[FoundNode]") -> str:
+    """Convert a find result to masked JSON string.
 
     Context fields (parent_role, parent_name, etc.) are included when non-None.
+
+    AIYES-113 conditional envelope: when the result is a scoped FindResult
+    (``scope_requested`` is True) the output is an envelope object
+    ``{"nodes": [...], "scope_matched": bool, "matched_ancestors": [...]}``.
+    On the unscoped path (a plain list, or a FindResult with
+    ``scope_requested`` False) the output is a BARE JSON array, byte-for-byte
+    identical to the pre-AIYES-113 output.
     """
     _CONTEXT_FIELDS = (
         "parent_role",
@@ -151,7 +158,7 @@ def format_find_nodes(nodes: List[FoundNode]) -> str:
         "sibling_count",
     )
     node_dicts = []
-    for n in nodes:
+    for n in result:
         d = dataclasses.asdict(n)
         # Remove context fields that are None for compactness
         for field in _CONTEXT_FIELDS:
@@ -159,6 +166,18 @@ def format_find_nodes(nodes: List[FoundNode]) -> str:
                 del d[field]
         node_dicts.append(d)
     masked = [mask_node_dict(d) for d in node_dicts]
+
+    if getattr(result, "scope_requested", False):
+        envelope: Dict[str, Any] = {
+            "nodes": masked,
+            "scope_matched": result.scope_matched,
+            "matched_ancestors": [
+                {"id": a.id, "role": a.role, "name": a.name}
+                for a in result.matched_ancestors
+            ],
+        }
+        return json.dumps(envelope, indent=2)
+
     return json.dumps(masked, indent=2)
 
 

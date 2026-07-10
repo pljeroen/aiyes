@@ -946,15 +946,29 @@ class ScenarioUseCaseExecutor:
             session_id = self._require_session()
             role = str(params.get("role", "*"))
             name_pattern = params.get("name_pattern", params.get("name"))
-            result = self._find.execute(
-                session_id=session_id,
-                role=role,
-                name_pattern=name_pattern,
-                state=params.get("state"),
-                no_prune=bool(params.get("no_prune", False)),
-            )
+            find_kwargs: dict[str, Any] = {
+                "session_id": session_id,
+                "role": role,
+                "name_pattern": name_pattern,
+                "state": params.get("state"),
+                "no_prune": bool(params.get("no_prune", False)),
+            }
+            # AIYES-113/C8: thread ancestor-scope params only when the step
+            # actually requests scoping, so an unscoped find step's call is
+            # byte-for-byte unchanged (both defaults are None on the use case).
+            if "within_role" in params or "within_name" in params:
+                find_kwargs["within_role"] = params.get("within_role")
+                find_kwargs["within_name"] = params.get("within_name")
+            result = self._find.execute(**find_kwargs)
             nodes = [_jsonable_dict(node) for node in result]
             output: dict[str, Any] = {"nodes": nodes}
+            # AIYES-113 conditional envelope: expose scope_matched /
+            # matched_ancestors only when a scope was requested.
+            if getattr(result, "scope_requested", False):
+                output["scope_matched"] = result.scope_matched
+                output["matched_ancestors"] = [
+                    _jsonable_dict(ancestor) for ancestor in result.matched_ancestors
+                ]
             if not nodes:
                 diagnostics = _selector_diagnostics(
                     _inspect_tree_snapshot(self._inspect, session_id),

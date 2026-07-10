@@ -626,11 +626,24 @@ def diff_cmd(session_id: Optional[str]) -> None:
 @cli.command("find")
 @click.option("--session", "session_id", default=None, help="Session ID.")
 @click.option("--state", default=None, help="Filter by state.")
+@click.option(
+    "--within-name",
+    default=None,
+    help="Restrict search to descendants of an ancestor matching this name pattern.",
+)
+@click.option(
+    "--within-role",
+    default=None,
+    help="Restrict search to descendants of an ancestor matching this role "
+    "(used with --within-name).",
+)
 @click.argument("role")
 @click.argument("name_pattern", default=None, required=False)
 def find_cmd(
     session_id: Optional[str],
     state: Optional[str],
+    within_name: Optional[str],
+    within_role: Optional[str],
     role: str,
     name_pattern: Optional[str],
 ) -> None:
@@ -646,6 +659,8 @@ def find_cmd(
             role=role,
             name_pattern=name_pattern,
             state=state,
+            within_role=within_role,
+            within_name=within_name,
         )
         click.echo(format_find_nodes(results))
     except Exception as exc:

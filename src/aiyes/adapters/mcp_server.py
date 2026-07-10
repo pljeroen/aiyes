@@ -619,6 +619,8 @@ def _build_dispatch_table(
             role=args["role"],
             name_pattern=args.get("name_pattern"),
             state=args.get("state"),
+            within_role=args.get("within_role"),
+            within_name=args.get("within_name"),
         )
         return pres().format_find_nodes(results)
 

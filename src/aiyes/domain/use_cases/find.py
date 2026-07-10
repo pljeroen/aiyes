@@ -6,7 +6,13 @@ import dataclasses
 from typing import List, Optional, Tuple
 
 from aiyes.domain.matching import name_matches
-from aiyes.domain.tree import enrich_tree, flatten_nodes, prune_tree
+from aiyes.domain.tree import (
+    enrich_tree,
+    flatten_nodes,
+    flatten_scoped_subtrees,
+    locate_ancestor_nodes,
+    prune_tree,
+)
 from aiyes.ports.accessibility_tree import AccessibilityTreePort
 from aiyes.ports.storage import SessionRepositoryPort
 from aiyes.ports.tree_store import TreeStorePort
@@ -40,6 +46,60 @@ class FoundNode:
             object.__setattr__(self, "actions", tuple(self.actions))
 
 
+@dataclasses.dataclass(frozen=True)
+class AncestorRef:
+    """Identity of a scoping ancestor echoed by a scoped find (AIYES-113/R4).
+
+    Names the ancestor node the scope matched, which may sit ABOVE a
+    FoundNode's immediate parent_role/parent_name.
+    """
+
+    id: str
+    role: str
+    name: str
+
+
+class FindResult(list):
+    """Result of a find operation (AIYES-113).
+
+    Subclasses ``list`` (a ``collections.abc.Sequence``), so it satisfies the
+    widened Sequence contract AND every pre-AIYES-113 back-compat idiom that
+    treated a find result as a concrete list: ``isinstance(result, list)``,
+    ``result == []``, ``len``, indexing (int / slice / negative), iteration and
+    truthiness — exactly as the old ``List[FoundNode]`` return value did. This
+    is the load-bearing backward-compatibility constraint C3 (T0), whose
+    falsifier is "any existing find test needing an edit"; because the prior
+    return type WAS a ``list``, several existing tests assert
+    ``isinstance(result, list)`` / ``result == []`` — a ``list`` subclass keeps
+    them green with zero edits while adding the scope fields. (Deviates from the
+    contract's recommended "frozen dataclass" vehicle; see the RUN_LEDGER /
+    README note. Stdlib-only, domain-pure — no external import, no I/O.)
+
+    Scope fields are inert on the unscoped path (``scope_requested=False``,
+    ``scope_matched=True`` vacuously, ``matched_ancestors=()``). On a scoped
+    call they distinguish a scope-matched result (``scope_matched=True``,
+    ``matched_ancestors`` non-empty) from a structured scoped-miss
+    (``scope_matched=False``, ``matched_ancestors=()``), per R2/C2.
+    """
+
+    def __init__(
+        self,
+        nodes: Tuple[FoundNode, ...] = (),
+        scope_requested: bool = False,
+        scope_matched: bool = True,
+        matched_ancestors: Tuple[AncestorRef, ...] = (),
+    ) -> None:
+        super().__init__(nodes)
+        self.scope_requested = scope_requested
+        self.scope_matched = scope_matched
+        self.matched_ancestors: Tuple[AncestorRef, ...] = tuple(matched_ancestors)
+
+    @property
+    def nodes(self) -> Tuple[FoundNode, ...]:
+        """The found nodes as a tuple (the list contents; read-only view)."""
+        return tuple(self)
+
+
 class FindUseCase:
     """Find nodes matching role and optional name pattern."""
 
@@ -60,8 +120,18 @@ class FindUseCase:
         name_pattern: Optional[str] = None,
         state: Optional[str] = None,
         no_prune: bool = False,
-    ) -> List[FoundNode]:
-        """Find nodes matching role, optional name pattern, and optional state."""
+        within_role: Optional[str] = None,
+        within_name: Optional[str] = None,
+    ) -> FindResult:
+        """Find nodes matching role, optional name pattern, and optional state.
+
+        When ``within_role`` and/or ``within_name`` are given (AIYES-113), the
+        search is restricted to the descendants of the matched ancestor
+        section(s): the ancestor(s) are located first, and ONLY their subtree(s)
+        feed the existing role/name_pattern/state filter chain. An absent
+        ancestor is a structured scoped-miss (``scope_matched=False``), NEVER a
+        silent whole-tree fallback. Unscoped calls are byte-for-byte unchanged.
+        """
         session = self._session_repo.load(session_id)
         if session is None:
             raise RuntimeError(
@@ -85,6 +155,27 @@ class FindUseCase:
         # Flatten domain tree
         nodes = flatten_nodes(domain_tree.roots)
 
+        # AIYES-113 ancestor scoping. None-check (not truthiness): an explicit
+        # empty within_name is still a scope request (C1/C3 scope_requested).
+        scope_requested = within_role is not None or within_name is not None
+        matched_ancestors: Tuple[AncestorRef, ...] = ()
+        if scope_requested:
+            ancestors = locate_ancestor_nodes(nodes, within_role, within_name)
+            if not ancestors:
+                # Structured scoped-miss (R2/C2): return immediately WITHOUT
+                # running the filter chain over the whole tree — no fallback.
+                return FindResult(
+                    nodes=(),
+                    scope_requested=True,
+                    scope_matched=False,
+                    matched_ancestors=(),
+                )
+            matched_ancestors = tuple(
+                AncestorRef(id=a.id, role=a.role, name=a.name) for a in ancestors
+            )
+            # Candidate pool = the matched ancestors' descendants only.
+            nodes = flatten_scoped_subtrees(ancestors)
+
         # Filter by role (wildcard '*' matches all)
         if role != "*":
             nodes = [n for n in nodes if n.role == role]
@@ -98,9 +189,9 @@ class FindUseCase:
             nodes = [n for n in nodes if state in n.states]
 
         # Convert domain Nodes to FoundNode result objects
-        result: List[FoundNode] = []
+        found: List[FoundNode] = []
         for n in nodes:
-            result.append(
+            found.append(
                 FoundNode(
                     id=n.id,
                     role=n.role,
@@ -117,4 +208,9 @@ class FindUseCase:
                 )
             )
 
-        return result
+        return FindResult(
+            nodes=tuple(found),
+            scope_requested=scope_requested,
+            scope_matched=True,
+            matched_ancestors=matched_ancestors,
+        )

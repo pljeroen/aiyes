@@ -152,6 +152,24 @@ or focused, `goto` reports a structured error and sends no keystrokes rather
 than typing into the wrong control. `reload` performs a cache-bypassing hard
 reload (Ctrl+Shift+R).
 
+`find` accepts two optional flags, `--within-name` and `--within-role`, that
+restrict the search to the descendants of a matching ancestor (for example a
+named section). They disambiguate identical results in different places: with
+two separate "Add" buttons, one under a "Holidays" section and one under a
+"Recurring holidays" section, `find push_button Add --within-role section
+--within-name "Recurring holidays"` returns only the button inside that
+section. `--within-name` is the same case-insensitive substring match used for a
+node's name; `--within-role` is an exact role match; when both are given the
+ancestor must match both. When a scope is requested the JSON result is an
+envelope `{"nodes": [...], "scope_matched": <bool>, "matched_ancestors":
+[{"id", "role", "name"}]}`: `scope_matched` is `false` (with empty
+`matched_ancestors`) when no ancestor matched — a scoped miss, never a silent
+whole-tree fallback — and distinguishes that miss from a matched section that
+simply contained no results. Without these flags `find` is unchanged: it
+searches the whole tree and returns a bare JSON array exactly as before. The
+flags are independent options, not a selector language, and apply to `find`
+only.
+
 ## Release scenarios
 
 `aieyes scenario run` executes deterministic scenario files for release-smoke
