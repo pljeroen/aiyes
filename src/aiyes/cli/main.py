@@ -34,8 +34,10 @@ from aiyes.cli.composition_root import (  # noqa: F401
     format_do,
     format_doctor,
     format_gesture_result,
+    format_goto_result,
     format_mcp_manifest,
     format_menu_result,
+    format_reload_result,
     format_inspect_result,
     format_metrics,
     format_navigate_result,
@@ -57,6 +59,7 @@ from aiyes.cli.composition_root import (  # noqa: F401
     format_reactive_wait,
     format_wait_stable,
     gesture_uc,
+    goto_uc,
     inspect_uc,
     key_uc,
     load_scenario_file,
@@ -65,6 +68,7 @@ from aiyes.cli.composition_root import (  # noqa: F401
     metrics_uc,
     mouse_uc,
     navigate_uc,
+    reload_uc,
     operation_log_adapter,
     prune_uc,
     resolve_session_id,
@@ -1604,6 +1608,67 @@ def navigate_cmd(session_id: Optional[str], action: str) -> None:
         sys.exit(1)
     finally:
         _log_operation("navigate", sid, t0, exit_code, error)
+
+
+# ─── Goto / Reload (AIYES-112) ──────────────────────────────────────
+
+
+@cli.command("goto")
+@click.option("--session", "session_id", default=None, help="Session ID.")
+@click.argument("url")
+def goto_cmd(session_id: Optional[str], url: str) -> None:
+    """Navigate a linux browser session to a URL via address-bar automation."""
+    t0 = clock.now()
+    sid = ""
+    exit_code = 0
+    error = ""
+    try:
+        sid = resolve_session_id(session_id)
+        result = goto_uc.execute(session_id=sid, url=url)
+        click.echo(
+            format_goto_result(
+                status=result.status,
+                session_id=result.session_id,
+                action=result.action,
+                url=result.url,
+                reason=result.reason,
+            )
+        )
+    except Exception as exc:
+        exit_code = 1
+        error = str(exc)
+        click.echo(format_system_error(str(exc)), err=True)
+        sys.exit(1)
+    finally:
+        _log_operation("goto", sid, t0, exit_code, error)
+
+
+@cli.command("reload")
+@click.option("--session", "session_id", default=None, help="Session ID.")
+def reload_cmd(session_id: Optional[str]) -> None:
+    """Cache-bypassing hard reload of the current page (linux browser session)."""
+    t0 = clock.now()
+    sid = ""
+    exit_code = 0
+    error = ""
+    try:
+        sid = resolve_session_id(session_id)
+        result = reload_uc.execute(session_id=sid)
+        click.echo(
+            format_reload_result(
+                status=result.status,
+                session_id=result.session_id,
+                action=result.action,
+                reason=result.reason,
+            )
+        )
+    except Exception as exc:
+        exit_code = 1
+        error = str(exc)
+        click.echo(format_system_error(str(exc)), err=True)
+        sys.exit(1)
+    finally:
+        _log_operation("reload", sid, t0, exit_code, error)
 
 
 # ─── Menu (GAP-11) ──────────────────────────────────────────────────

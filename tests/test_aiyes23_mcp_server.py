@@ -141,9 +141,9 @@ class TestServerDependencies:
             deps.clock = MagicMock()  # type: ignore[misc]
 
     def test_has_39_fields(self) -> None:
-        """BC-26: Exactly 40 fields after the AIYES-107 diagnostic_log wiring."""
+        """BC-26: Exactly 42 fields after the AIYES-112 goto/reload wiring."""
         fields = dataclasses.fields(ServerDependencies)
-        assert len(fields) == 40
+        assert len(fields) == 42
 
     def test_use_case_fields_present(self) -> None:
         """BC-26: Core use case fields are present."""
@@ -212,13 +212,13 @@ class TestListTools:
 
     @pytest.mark.asyncio
     async def test_list_tools_count_is_38(self) -> None:
-        """BC-17: list_tools includes capabilities and swipe."""
+        """BC-17: list_tools includes capabilities, swipe, goto, reload."""
         deps = _make_mock_deps()
         server = create_mcp_server(deps)
 
         # Call list_tools handler.
         tools = await server.list_tools()
-        assert len(tools) == 38
+        assert len(tools) == 40
 
     @pytest.mark.asyncio
     async def test_tool_names_match_enumerate_commands(self) -> None:

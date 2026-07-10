@@ -144,9 +144,9 @@ class TestEnumerateCommands:
         assert isinstance(result, list)
 
     def test_enumerate_commands_count_is_38(self) -> None:
-        """BC-01: Leaf commands include session capabilities and swipe."""
+        """BC-01: Leaf commands include session capabilities, swipe, goto, reload."""
         result = enumerate_commands(cli)
-        assert len(result) == 38
+        assert len(result) == 40
 
     def test_enumerate_commands_all_commandinfo(self) -> None:
         """BC-01: Every element is a CommandInfo instance."""
@@ -238,7 +238,7 @@ class TestNamingAlgorithm:
             # gesture group (2)
             "gesture_pinch",
             "gesture_two_finger_scroll",
-            # top-level (16)
+            # top-level (18)
             "inspect",
             "diff",
             "find",
@@ -257,6 +257,8 @@ class TestNamingAlgorithm:
             "detect_dialog",
             "navigate",
             "menu",
+            "goto",
+            "reload",
             "scenario_run",
             "scenario_preflight",
             "scenario_fixtures",

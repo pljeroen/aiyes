@@ -1177,8 +1177,8 @@ class TestSchemaCountAfterGroupC:
         assert "debug_bundle" in tool_names
 
         # Scenario agent-usability surfaces add three scenario leaf commands;
-        # AIYES-47 adds top-level swipe.
-        assert len(result) == 38
+        # AIYES-47 adds top-level swipe; AIYES-112 adds goto + reload.
+        assert len(result) == 40
 
 
 class TestMcpDispatchGroupC:
@@ -1202,13 +1202,13 @@ class TestMcpDispatchGroupC:
 
     @pytest.mark.asyncio
     async def test_mcp_list_tools_count_is_38(self) -> None:
-        """REQ-C50: MCP list_tools includes capabilities and swipe."""
+        """REQ-C50: MCP list_tools includes capabilities, swipe, goto, reload."""
         from aiyes.adapters.mcp_server import create_mcp_server
 
         deps = self._make_deps()
         server = create_mcp_server(deps)
         tools = await server.list_tools()
-        assert len(tools) == 38
+        assert len(tools) == 40
 
     def _make_deps(self):
         """Build mock ServerDependencies with all required fields."""

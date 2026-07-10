@@ -530,3 +530,40 @@ def format_menu_result(
     if node_name is not None:
         result["node_name"] = node_name
     return json.dumps(result, indent=2)
+
+
+def format_goto_result(
+    status: str,
+    session_id: str,
+    action: str = "goto",
+    url: Optional[str] = None,
+    reason: Optional[str] = None,
+) -> str:
+    """Convert goto result to JSON string (optional fields omitted when None)."""
+    result: Dict[str, Any] = {
+        "status": status,
+        "session_id": session_id,
+        "action": action,
+    }
+    if url is not None:
+        result["url"] = url
+    if reason is not None:
+        result["reason"] = reason
+    return json.dumps(result, indent=2)
+
+
+def format_reload_result(
+    status: str,
+    session_id: str,
+    action: str = "reload",
+    reason: Optional[str] = None,
+) -> str:
+    """Convert reload result to JSON string (optional reason omitted when None)."""
+    result: Dict[str, Any] = {
+        "status": status,
+        "session_id": session_id,
+        "action": action,
+    }
+    if reason is not None:
+        result["reason"] = reason
+    return json.dumps(result, indent=2)

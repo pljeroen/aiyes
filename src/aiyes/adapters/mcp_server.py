@@ -87,6 +87,8 @@ _MCP_CONTROL_TOOLS = frozenset(
         "gesture_two_finger_scroll",
         "navigate",
         "menu",
+        "goto",
+        "reload",
         "scenario_run",
     )
 )
@@ -251,7 +253,7 @@ def _path_is_relative_to(path: Path, root: Path) -> bool:
 class ServerDependencies:
     """Injectable dependencies for the MCP server.
 
-    24 use cases + clock + operation_log + resolve_session_id = 27 fields.
+    26 use cases + clock + operation_log + resolve_session_id = 29 fields.
     """
 
     session_start_uc: Any
@@ -281,6 +283,8 @@ class ServerDependencies:
     gesture_uc: Any
     navigate_uc: Any
     menu_uc: Any
+    goto_uc: Any
+    reload_uc: Any
     clock: Any
     operation_log: Any
     resolve_session_id: Any
@@ -931,6 +935,32 @@ def _build_dispatch_table(
             node_name=result.node_name,
         )
 
+    def _handle_goto(
+        args: Dict[str, Any], deps: ServerDependencies, session_id: str
+    ) -> str:
+        result = deps.goto_uc.execute(
+            session_id=session_id,
+            url=args["url"],
+        )
+        return pres().format_goto_result(
+            status=result.status,
+            session_id=result.session_id,
+            action=result.action,
+            url=result.url,
+            reason=result.reason,
+        )
+
+    def _handle_reload(
+        args: Dict[str, Any], deps: ServerDependencies, session_id: str
+    ) -> str:
+        result = deps.reload_uc.execute(session_id=session_id)
+        return pres().format_reload_result(
+            status=result.status,
+            session_id=result.session_id,
+            action=result.action,
+            reason=result.reason,
+        )
+
     def _handle_scenario_run(
         args: Dict[str, Any], deps: ServerDependencies, session_id: str
     ) -> str:
@@ -1238,6 +1268,18 @@ def _build_dispatch_table(
             session_class="bound",
             presenter=pres,
         ),
+        "goto": ToolHandler(
+            tool_name="goto",
+            use_case_call=_handle_goto,
+            session_class="bound",
+            presenter=pres,
+        ),
+        "reload": ToolHandler(
+            tool_name="reload",
+            use_case_call=_handle_reload,
+            session_class="bound",
+            presenter=pres,
+        ),
         "scenario_run": ToolHandler(
             tool_name="scenario_run",
             use_case_call=_handle_scenario_run,
@@ -1300,6 +1342,8 @@ def main() -> None:
         gesture_uc=comp_root.gesture_uc,
         navigate_uc=comp_root.navigate_uc,
         menu_uc=comp_root.menu_uc,
+        goto_uc=comp_root.goto_uc,
+        reload_uc=comp_root.reload_uc,
         clock=comp_root.clock,
         operation_log=comp_root.operation_log_adapter,
         resolve_session_id=comp_root.resolve_session_id,

@@ -29,10 +29,12 @@ from aiyes.cli.presenter import (  # noqa: F401
     format_find,
     format_find_nodes,
     format_gesture_result,
+    format_goto_result,
     format_inspect,
     format_inspect_result,
     format_mcp_manifest,
     format_menu_result,
+    format_reload_result,
     format_metrics,
     format_navigate_result,
     format_prune,
@@ -522,6 +524,8 @@ from aiyes.domain.use_cases.clipboard import ClipboardUseCase  # noqa: E402
 from aiyes.domain.use_cases.gesture import GestureUseCase  # noqa: E402
 from aiyes.domain.use_cases.navigate import NavigateUseCase  # noqa: E402
 from aiyes.domain.use_cases.menu import MenuUseCase  # noqa: E402
+from aiyes.domain.use_cases.goto import GotoUseCase  # noqa: E402
+from aiyes.domain.use_cases.reload import ReloadUseCase  # noqa: E402
 
 _xclip = XclipAdapter()
 _adb_clipboard = AdbClipboardAdapter()
@@ -616,6 +620,18 @@ menu_uc = MenuUseCase(
     session_repo=_session_repo,
     tree_store=_tree_store,
     clock=_clock,
+)
+
+goto_uc = GotoUseCase(
+    tree_port=_dispatching_tree,
+    action_port=_dispatching_action,
+    input_port=_dispatching_input,
+    session_repo=_session_repo,
+)
+
+reload_uc = ReloadUseCase(
+    input_port=_dispatching_input,
+    session_repo=_session_repo,
 )
 
 scenario_run_uc = ScenarioRunUseCase(

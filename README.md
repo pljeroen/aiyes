@@ -137,10 +137,20 @@ sudo apt install xvfb xdotool xclip imagemagick at-spi2-core \
 | **inspect** | inspect, find, diff, wait, wait-reactive, wait-stable, detect-dialog | Read and query GUI state |
 | **control** | action, mouse (move/click/drag/scroll), key, type, do | Drive input |
 | **scenario** | scenario run | Run deterministic release scenario files and optional evidence bundles |
-| **interaction** | clipboard (read/write), gesture (pinch/scroll), navigate, menu | Platform-specific actions |
+| **interaction** | clipboard (read/write), gesture (pinch/scroll), navigate, menu, goto, reload | Platform-specific actions |
 | **diagnostics** | doctor, debug-bundle, screenshot, mcp-manifest, help-json | System checks and introspection |
 
 Run `aieyes --help` or `aieyes <command> --help` for full usage.
+
+`goto <url>` and `reload` are **linux/AT-SPI + xdotool browser-session
+primitives** (not available on the Android backend). `goto` is address-bar
+automation — it locates the browser address bar (an `entry` whose accessible
+name contains "address"), focuses it, selects all, types the URL and presses
+Return; it is verified on Firefox and works for any AT-SPI-exposed address bar,
+but is not a hard cross-browser guarantee. If the address bar cannot be located
+or focused, `goto` reports a structured error and sends no keystrokes rather
+than typing into the wrong control. `reload` performs a cache-bypassing hard
+reload (Ctrl+Shift+R).
 
 ## Release scenarios
 

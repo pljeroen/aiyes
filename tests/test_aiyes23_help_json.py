@@ -127,11 +127,11 @@ class TestHelpJsonCommandsArray:
     """Commands array has correct structure and count."""
 
     def test_commands_count_is_38(self) -> None:
-        """BC-15: commands array includes capabilities and swipe."""
+        """BC-15: commands array includes capabilities, swipe, goto, reload."""
         runner = CliRunner()
         result = runner.invoke(cli, ["help-json"])
         data = json.loads(result.output)
-        assert len(data["commands"]) == 38
+        assert len(data["commands"]) == 40
 
     def test_each_command_has_four_keys(self) -> None:
         """BC-14: Each command entry has exactly name, tool_name, description, parameters."""
