@@ -99,12 +99,23 @@ class TestSessionResolveActionableSuggestions:
         assert "No active sessions" in str(exc_info.value)
 
     def test_multiple_sessions_suggests_session_list(self) -> None:
-        """When multiple active sessions, suggest 'aieyes session list'."""
+        """SUPERSEDED by AIYES-110-R1 (authorized supersede).
+
+        Previously asserted that >1 active sessions raise a RuntimeError
+        matching 'session list' / 'Multiple sessions' on the RESOLVE path.
+        AIYES-110 replaces that raise with a most-recent-session fallback
+        (max over (started_at, session_id)), so this now asserts the new
+        selection. RED until A9 lands the fallback (execute(None) still raises
+        'Multiple sessions found' today, so the call fails before the assert).
+
+        The sibling TestSessionStopActionableSuggestions test is UNCHANGED:
+        session_stop DELIBERATELY still raises on >1 (OD-110-1 / C5).
+        """
         repo = FakeSessionRepository()
         process = FakeProcess()
 
-        s1 = _make_session(session_id="s1", app_pid=100, xvfb_pid=200)
-        s2 = _make_session(session_id="s2", app_pid=300, xvfb_pid=400)
+        s1 = _make_session(session_id="s1", app_pid=100, xvfb_pid=200, started_at=100.0)
+        s2 = _make_session(session_id="s2", app_pid=300, xvfb_pid=400, started_at=900.0)
         repo.save(s1)
         repo.save(s2)
         process._running[100] = True
@@ -114,9 +125,9 @@ class TestSessionResolveActionableSuggestions:
 
         uc = SessionResolveUseCase(session_repo=repo, process=process)
 
-        with pytest.raises(RuntimeError, match="session list") as exc_info:
-            uc.execute(session_id=None)
-        assert "Multiple sessions" in str(exc_info.value)
+        resolved = uc.execute(session_id=None)
+
+        assert resolved == "s2"
 
 
 class TestSessionStopActionableSuggestions:

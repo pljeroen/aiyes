@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Optional
 
 from aiyes.domain.use_cases.session_liveness import is_session_active
 from aiyes.ports.android_app_lifecycle import AndroidAppLifecyclePort
@@ -35,28 +35,27 @@ class SessionResolveUseCase:
         """Resolve to a concrete session ID.
 
         Returns the given session_id if not None.
-        Otherwise finds the sole active session.
+        Otherwise finds the active session: the sole one when exactly one is
+        active, or — when more than one is active — the most recent, selected
+        as max over the total order (started_at, session_id).
         Uses backend-aware liveness rules.
-        Raises RuntimeError if no active sessions or multiple active sessions.
+        Raises RuntimeError if no active sessions.
         """
         if session_id is not None:
             return session_id
 
         sessions = self._session_repo.load_all()
 
-        active: List[str] = []
-        for s in sessions:
-            if self._is_session_active(s):
-                active.append(s.session_id)
+        # Filter to only active sessions using backend-aware liveness
+        active_sessions = [s for s in sessions if self._is_session_active(s)]
 
-        if len(active) == 0:
+        if len(active_sessions) == 0:
             raise RuntimeError(
                 "No active sessions found. Run 'aieyes session start' to start one."
             )
-        if len(active) > 1:
-            raise RuntimeError(
-                f"Multiple sessions found, specify one: {active}. "
-                "Run 'aieyes session list' to see available sessions."
-            )
+        if len(active_sessions) > 1:
+            return max(
+                active_sessions, key=lambda s: (s.started_at, s.session_id)
+            ).session_id
 
-        return active[0]
+        return active_sessions[0].session_id
