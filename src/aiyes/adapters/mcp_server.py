@@ -888,6 +888,19 @@ def _build_dispatch_table(
         )
         return pres().format_gesture_result()
 
+    def _handle_swipe(
+        args: Dict[str, Any], deps: ServerDependencies, session_id: str
+    ) -> str:
+        deps.gesture_uc.swipe(
+            session_id=session_id,
+            x1=args["x1"],
+            y1=args["y1"],
+            x2=args["x2"],
+            y2=args["y2"],
+            duration_ms=args.get("duration_ms", 300),
+        )
+        return pres().format_gesture_result()
+
     def _handle_navigate(
         args: Dict[str, Any], deps: ServerDependencies, session_id: str
     ) -> str:
@@ -1199,6 +1212,12 @@ def _build_dispatch_table(
         "gesture_two_finger_scroll": ToolHandler(
             tool_name="gesture_two_finger_scroll",
             use_case_call=_handle_gesture_two_finger_scroll,
+            session_class="bound",
+            presenter=pres,
+        ),
+        "swipe": ToolHandler(
+            tool_name="swipe",
+            use_case_call=_handle_swipe,
             session_class="bound",
             presenter=pres,
         ),
