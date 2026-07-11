@@ -37,6 +37,9 @@ class FoundNode:
     index_in_parent: Optional[int] = None
     depth: Optional[int] = None
     sibling_count: Optional[int] = None
+    # Android view resource-id surfaced from the source Node; "" otherwise
+    # (AIYES-116/C2). Appended AFTER sibling_count.
+    resource_id: str = ""
 
     def __post_init__(self) -> None:
         """Ensure collection fields are truly immutable."""
@@ -129,6 +132,7 @@ class FindUseCase:
         no_prune: bool = False,
         within_role: Optional[str] = None,
         within_name: Optional[str] = None,
+        resource_id: Optional[str] = None,
     ) -> FindResult:
         """Find nodes matching role, optional name pattern, and optional state.
 
@@ -200,6 +204,14 @@ class FindUseCase:
         if state is not None:
             nodes = [n for n in nodes if state in n.states]
 
+        # AIYES-116: filter by EXACT resource_id (full-string ==, never
+        # substring/regex — DISTINCT from the name_matches substring matcher).
+        # TRUTHY guard: both None and "" mean "no resource_id filter" (R2). Do
+        # NOT normalize to is-not-None — an explicit "" would then exclude every
+        # non-empty node, violating "empty/absent means no filter".
+        if resource_id:
+            nodes = [n for n in nodes if n.resource_id == resource_id]
+
         # Convert domain Nodes to FoundNode result objects
         found: List[FoundNode] = []
         for n in nodes:
@@ -217,6 +229,7 @@ class FindUseCase:
                     index_in_parent=n.index_in_parent,
                     depth=n.depth,
                     sibling_count=n.sibling_count,
+                    resource_id=n.resource_id,
                 )
             )
 

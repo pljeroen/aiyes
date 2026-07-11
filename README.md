@@ -181,6 +181,18 @@ timeout. `role_drift` is a diagnostic only: it does not change what `find`/`wait
 match or select and never auto-selects a drifted node. The key is omitted
 entirely when there is no drift.
 
+`find` also accepts `--resource-id`, which selects nodes by their **exact**
+Android resource-id (`viewIdResourceName`, e.g. `com.example.app:id/create`). It
+is a full-string equality match, never a substring or regex: `--resource-id
+com.x:id/add` matches `com.x:id/add` and never `com.x:id/add_extra`. It composes
+(AND) with `role`, the name pattern, `--within-*`, and `--state`; an absent or
+empty value applies no resource-id filter. This is an **Android-only** selector:
+Linux/AT-SPI nodes carry no resource-id, so the field is empty there and the
+filter matches nothing. Matched nodes surface a `resource_id` field in the
+`find` and `inspect` JSON output so a caller can discover the stable identifier;
+following the same compaction convention as the context fields, the key is
+omitted entirely when empty (Linux/AT-SPI output is byte-identical to before).
+
 ## Release scenarios
 
 `aieyes scenario run` executes deterministic scenario files for release-smoke

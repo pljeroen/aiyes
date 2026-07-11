@@ -52,6 +52,10 @@ class Node:
     depth: Optional[int] = None
     sibling_count: Optional[int] = None
     stable_id: Optional[str] = None
+    # Android view resource-id (viewIdResourceName); "" for AT-SPI/Linux nodes
+    # and for Android elements without one. Appended AFTER stable_id so existing
+    # positional/field-order expectations stay intact (AIYES-116/C1).
+    resource_id: str = ""
 
     def __post_init__(self) -> None:
         """Ensure collection fields are truly immutable."""
@@ -520,6 +524,7 @@ def _raw_node_to_domain(raw: dict) -> Optional[Node]:
         children=children,
         value=raw.get("value"),
         stable_id=raw.get("stable_id"),
+        resource_id=raw.get("resource_id") or "",
     )
 
 

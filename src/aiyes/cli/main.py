@@ -637,6 +637,13 @@ def diff_cmd(session_id: Optional[str]) -> None:
     help="Restrict search to descendants of an ancestor matching this role "
     "(used with --within-name).",
 )
+@click.option(
+    "--resource-id",
+    "resource_id",
+    default=None,
+    help="Match nodes by EXACT Android resource-id (full-string, not substring "
+    "or regex). Android-only; ignored on Linux/AT-SPI nodes (which have none).",
+)
 @click.argument("role")
 @click.argument("name_pattern", default=None, required=False)
 def find_cmd(
@@ -644,6 +651,7 @@ def find_cmd(
     state: Optional[str],
     within_name: Optional[str],
     within_role: Optional[str],
+    resource_id: Optional[str],
     role: str,
     name_pattern: Optional[str],
 ) -> None:
@@ -661,6 +669,7 @@ def find_cmd(
             state=state,
             within_role=within_role,
             within_name=within_name,
+            resource_id=resource_id,
         )
         click.echo(format_find_nodes(results))
     except Exception as exc:

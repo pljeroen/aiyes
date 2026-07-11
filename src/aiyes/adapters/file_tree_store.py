@@ -33,6 +33,7 @@ def _node_from_dict(data: Dict[str, Any]) -> Node:
         children=tuple(children),
         value=data.get("value"),
         stable_id=data.get("stable_id"),
+        resource_id=data.get("resource_id", ""),
     )
 
 

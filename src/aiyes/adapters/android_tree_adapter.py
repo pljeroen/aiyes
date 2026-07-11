@@ -102,6 +102,15 @@ def _extract_stable_name(element: ET.Element) -> str:
     return element.get("text", "")
 
 
+def _extract_resource_id(element: ET.Element) -> str:
+    """Extract the Android view resource-id (viewIdResourceName).
+
+    Returns "" when the attribute is absent or empty. Mirrors the
+    _extract_role/_extract_name convention.
+    """
+    return element.get("resource-id", "")
+
+
 def _extract_role(element: ET.Element) -> str:
     """Extract the role from Android class attribute.
 
@@ -125,9 +134,10 @@ def _parse_element(
     bounds = _parse_bounds(element.get("bounds", ""))
     states = _extract_states(element)
     actions = _extract_actions(element)
+    resource_id = _extract_resource_id(element)
 
     node_id = registry.get_or_assign(role, name, path)
-    stable_id = _stable_android_id(element, bounds, path)
+    stable_id = _stable_android_id(element, bounds, path, resource_id)
 
     children: List[Node] = []
     for idx, child in enumerate(element):
@@ -145,6 +155,7 @@ def _parse_element(
         actions=actions,
         children=tuple(children),
         stable_id=stable_id,
+        resource_id=resource_id,
     )
 
 
@@ -152,9 +163,13 @@ def _stable_android_id(
     element: ET.Element,
     bounds: Tuple[int, int, int, int],
     path: List[int],
+    resource_id: str,
 ) -> str:
+    # Value-preserving refactor (AIYES-116): the resource_id is now extracted
+    # ONCE by the caller and passed in, instead of re-reading it inline here.
+    # element.get("resource-id", "") and _extract_resource_id are identical, so
+    # the emitted string is byte-identical (golden-pinned).
     role = element.get("class", "") or _extract_role(element)
-    resource_id = element.get("resource-id", "")
     name = _extract_stable_name(element)
     bounds_text = ",".join(str(part) for part in bounds)
     path_text = ".".join(str(part) for part in path)

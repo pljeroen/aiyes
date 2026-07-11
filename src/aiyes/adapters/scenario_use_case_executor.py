@@ -966,8 +966,13 @@ class ScenarioUseCaseExecutor:
             if "within_role" in params or "within_name" in params:
                 find_kwargs["within_role"] = params.get("within_role")
                 find_kwargs["within_name"] = params.get("within_name")
+            # AIYES-116: thread resource_id only when the step declares it, so an
+            # unscoped find step's call stays byte-identical (mirrors the within_*
+            # conditional-inclusion precedent; the use case also defaults to None).
+            if "resource_id" in params:
+                find_kwargs["resource_id"] = params.get("resource_id")
             result = self._find.execute(**find_kwargs)
-            nodes = [_jsonable_dict(node) for node in result]
+            nodes = [_find_node_jsonable(node) for node in result]
             output: dict[str, Any] = {"nodes": nodes}
             # AIYES-113 conditional envelope: expose scope_matched /
             # matched_ancestors only when a scope was requested.
@@ -1317,6 +1322,20 @@ def _jsonable_dict(value: Any) -> dict[str, Any]:
     if isinstance(converted, dict):
         return converted
     return {"value": converted}
+
+
+def _find_node_jsonable(node: Any) -> dict[str, Any]:
+    """Serialize a FoundNode for a scenario find step, OMITTING resource_id
+    when "" (AIYES-116/C4).
+
+    A LOCAL pop only for the find-step node serialization — the shared generic
+    ``_to_jsonable`` keeps its is-not-None semantics (a legitimately-"" field on
+    any OTHER dataclass still serializes) and is deliberately left unchanged.
+    """
+    node_dict = _jsonable_dict(node)
+    if not node_dict.get("resource_id"):
+        node_dict.pop("resource_id", None)
+    return node_dict
 
 
 def _to_jsonable(value: Any) -> Any:

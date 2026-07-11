@@ -614,7 +614,7 @@ def _build_dispatch_table(
     def _handle_find(
         args: Dict[str, Any], deps: ServerDependencies, session_id: str
     ) -> str:
-        results = deps.find_uc.execute(
+        find_kwargs: Dict[str, Any] = dict(
             session_id=session_id,
             role=args["role"],
             name_pattern=args.get("name_pattern"),
@@ -622,6 +622,12 @@ def _build_dispatch_table(
             within_role=args.get("within_role"),
             within_name=args.get("within_name"),
         )
+        # AIYES-116: thread resource_id only when the caller supplied it, so an
+        # unscoped/legacy find call stays byte-for-byte unchanged (the use case
+        # also defaults to None). Mirrors the scenario conditional-inclusion.
+        if "resource_id" in args:
+            find_kwargs["resource_id"] = args.get("resource_id")
+        results = deps.find_uc.execute(**find_kwargs)
         return pres().format_find_nodes(results)
 
     def _handle_screenshot(

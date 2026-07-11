@@ -164,6 +164,11 @@ def format_find_nodes(result: "FindResult | List[FoundNode]") -> str:
         for field in _CONTEXT_FIELDS:
             if field in d and d[field] is None:
                 del d[field]
+        # AIYES-116: OMIT resource_id when "" (separate truthy pop — the context
+        # fields above are None-only Optionals; resource_id is a non-Optional
+        # falsy-but-not-None field, so an empty value keeps output byte-identical).
+        if not d.get("resource_id"):
+            d.pop("resource_id", None)
         node_dicts.append(d)
     masked = [mask_node_dict(d) for d in node_dicts]
 

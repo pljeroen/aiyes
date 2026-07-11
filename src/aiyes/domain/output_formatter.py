@@ -52,6 +52,11 @@ def node_to_dict(
         result["value"] = node.value
     if node.stable_id is not None:
         result["stable_id"] = node.stable_id
+    # AIYES-116: OMIT when "" (truthiness guard — a NEW guard, distinct from the
+    # is-not-None guards above; resource_id is a non-Optional falsy-but-not-None
+    # field, so an empty value must produce byte-identical pre-change output).
+    if node.resource_id:
+        result["resource_id"] = node.resource_id
 
     # Context fields — only include when non-None (compactness)
     if node.parent_role is not None:
