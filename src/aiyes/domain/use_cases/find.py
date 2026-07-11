@@ -7,7 +7,9 @@ from typing import List, Optional, Tuple
 
 from aiyes.domain.matching import name_matches
 from aiyes.domain.tree import (
+    RoleDriftCandidate,
     enrich_tree,
+    find_role_drift,
     flatten_nodes,
     flatten_scoped_subtrees,
     locate_ancestor_nodes,
@@ -88,11 +90,16 @@ class FindResult(list):
         scope_requested: bool = False,
         scope_matched: bool = True,
         matched_ancestors: Tuple[AncestorRef, ...] = (),
+        role_drift: Tuple[RoleDriftCandidate, ...] = (),
     ) -> None:
         super().__init__(nodes)
         self.scope_requested = scope_requested
         self.scope_matched = scope_matched
         self.matched_ancestors: Tuple[AncestorRef, ...] = tuple(matched_ancestors)
+        # AIYES-114 diagnostic: same-name-different-role candidates surfaced on a
+        # zero-match exact-role find. Empty on every match / non-drift path. A
+        # side-channel only — never changes the list contents (C3).
+        self.role_drift: Tuple[RoleDriftCandidate, ...] = tuple(role_drift)
 
     @property
     def nodes(self) -> Tuple[FoundNode, ...]:
@@ -176,6 +183,11 @@ class FindUseCase:
             # Candidate pool = the matched ancestors' descendants only.
             nodes = flatten_scoped_subtrees(ancestors)
 
+        # AIYES-114: capture the pre-role-filter pool (scope-respecting) so the
+        # role-drift diagnostic sees nodes of every role. On a scoped call this
+        # is the ancestor subtree, so drift never points outside the scope.
+        pre_role_nodes = nodes
+
         # Filter by role (wildcard '*' matches all)
         if role != "*":
             nodes = [n for n in nodes if n.role == role]
@@ -208,9 +220,18 @@ class FindUseCase:
                 )
             )
 
+        # AIYES-114 diagnostic-only role drift: computed ONLY on the zero-match
+        # path, purely to populate the additive side-channel. It never feeds back
+        # into the matched set above (C3/FC-FINDPURE-02). The detector self-guards
+        # to () for role=='*' / falsy name_pattern.
+        role_drift: Tuple[RoleDriftCandidate, ...] = ()
+        if not found:
+            role_drift = find_role_drift(pre_role_nodes, role, name_pattern)
+
         return FindResult(
             nodes=tuple(found),
             scope_requested=scope_requested,
             scope_matched=True,
             matched_ancestors=matched_ancestors,
+            role_drift=role_drift,
         )

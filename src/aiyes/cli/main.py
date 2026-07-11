@@ -1093,6 +1093,7 @@ def wait_cmd(
                 timeout=result.timeout,
                 node_id=result.id,
                 transient=result.transient,
+                role_drift=result.role_drift,
             )
         )
     except Exception as exc:

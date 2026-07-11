@@ -969,6 +969,13 @@ class ScenarioUseCaseExecutor:
                 output["matched_ancestors"] = [
                     _jsonable_dict(ancestor) for ancestor in result.matched_ancestors
                 ]
+            # AIYES-114: surface the role-drift diagnostic (manual conditional
+            # add, mirroring matched_ancestors) — omitted entirely when empty.
+            role_drift = getattr(result, "role_drift", ())
+            if role_drift:
+                output["role_drift"] = [
+                    _jsonable_dict(candidate) for candidate in role_drift
+                ]
             if not nodes:
                 diagnostics = _selector_diagnostics(
                     _inspect_tree_snapshot(self._inspect, session_id),

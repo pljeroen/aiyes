@@ -1673,14 +1673,19 @@ class TestDetectDialogCli:
 
 
 class TestWaitResultFieldsUpdated:
-    """ARCH: WaitResult fields include transient after GAP-06."""
+    """ARCH: WaitResult fields include transient after GAP-06, role_drift after AIYES-114."""
 
     def test_wait_result_has_transient_field(self) -> None:
-        """WaitResult fields now include found, timeout, id, transient."""
+        """WaitResult fields now include found, timeout, id, transient, role_drift.
+
+        AIYES-114 (C4a) mandatorily added the role_drift diagnostic field.
+        The closed set is updated to the new EXACT truth; still an exact-set
+        equality (not a subset), so any future unexpected field is caught.
+        """
         from aiyes.domain.use_cases.wait import WaitResult
 
         fields = {f.name for f in dataclasses.fields(WaitResult)}
-        assert fields == {"found", "timeout", "id", "transient"}
+        assert fields == {"found", "timeout", "id", "transient", "role_drift"}
 
 
 class TestSessionStatusSessionNotFound:

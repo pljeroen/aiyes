@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import Optional
+from typing import Optional, Tuple
 
 from aiyes.domain.matching import name_matches
-from aiyes.domain.tree import flatten_nodes
+from aiyes.domain.tree import RoleDriftCandidate, find_role_drift, flatten_nodes
 from aiyes.ports.accessibility_tree import AccessibilityTreePort
 from aiyes.ports.clock import ClockPort
 from aiyes.ports.storage import SessionRepositoryPort
@@ -21,6 +21,12 @@ class WaitResult:
     timeout: bool = False
     id: Optional[str] = None
     transient: bool = False
+    # AIYES-114 diagnostic: same-name-different-role candidates surfaced on the
+    # two "target never matched" timeouts. The None default is LOAD-BEARING
+    # (C4a): the scenario executor's generic _to_jsonable drops a None value but
+    # would leak a ()-default as an always-present "role_drift": [] key. None on
+    # every success / absent / present branch keeps those outputs byte-identical.
+    role_drift: Optional[Tuple[RoleDriftCandidate, ...]] = None
 
 
 class WaitUseCase:
@@ -90,6 +96,10 @@ class WaitUseCase:
             domain_tree = self._tree.get_tree(session)
             nodes = flatten_nodes(domain_tree.roots)
 
+            # AIYES-114: retain the pre-role-filter pool (this poll's snapshot)
+            # for the role-drift diagnostic used at the "never matched" timeouts.
+            all_nodes = nodes
+
             # Filter by role
             if role != "*":
                 nodes = [n for n in nodes if n.role == role]
@@ -141,10 +151,16 @@ class WaitUseCase:
                             transient=True,
                             id=seen_ids[0],
                         )
-                    # Never seen
-                    return WaitResult(found=False, timeout=True)
+                    # Never seen (transient) — a genuine "target never matched"
+                    # timeout: attach the role-drift diagnostic (C2).
+                    drift = find_role_drift(all_nodes, role, name_pattern)
+                    return WaitResult(
+                        found=False, timeout=True, role_drift=drift or None
+                    )
                 if absent:
                     return WaitResult(found=True, timeout=True)
-                return WaitResult(found=False, timeout=True)
+                # Normal-mode "target never matched" timeout — attach role drift.
+                drift = find_role_drift(all_nodes, role, name_pattern)
+                return WaitResult(found=False, timeout=True, role_drift=drift or None)
 
             self._clock.sleep(poll_interval)

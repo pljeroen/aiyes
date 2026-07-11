@@ -167,15 +167,26 @@ def format_find_nodes(result: "FindResult | List[FoundNode]") -> str:
         node_dicts.append(d)
     masked = [mask_node_dict(d) for d in node_dicts]
 
-    if getattr(result, "scope_requested", False):
-        envelope: Dict[str, Any] = {
-            "nodes": masked,
-            "scope_matched": result.scope_matched,
-            "matched_ancestors": [
+    scope_requested = getattr(result, "scope_requested", False)
+    role_drift = getattr(result, "role_drift", ())
+
+    # AIYES-114 three-way envelope: widen the trigger to `scope_requested OR
+    # role_drift`. Unscoped-and-no-drift stays a byte-identical bare array; a
+    # scope-only (no drift) call stays the byte-identical AIYES-113 two-key
+    # envelope (role_drift key OMITTED, never []); a non-empty role_drift yields
+    # an envelope carrying the diagnostic.
+    if scope_requested or role_drift:
+        envelope: Dict[str, Any] = {"nodes": masked}
+        if scope_requested:
+            envelope["scope_matched"] = result.scope_matched
+            envelope["matched_ancestors"] = [
                 {"id": a.id, "role": a.role, "name": a.name}
                 for a in result.matched_ancestors
-            ],
-        }
+            ]
+        if role_drift:
+            envelope["role_drift"] = [
+                {"id": c.id, "role": c.role, "name": c.name} for c in role_drift
+            ]
         return json.dumps(envelope, indent=2)
 
     return json.dumps(masked, indent=2)
@@ -354,10 +365,14 @@ def format_wait(
     timeout: bool = False,
     node_id: Optional[str] = None,
     transient: bool = False,
+    role_drift: Any = None,
 ) -> str:
     """Convert wait result to JSON string.
 
-    Includes transient=true in output only when the flag is set.
+    Includes transient=true in output only when the flag is set. AIYES-114: the
+    role_drift diagnostic (same {id, role, name} shape as a find envelope) is
+    emitted ONLY when non-empty — the key is OMITTED entirely otherwise (never
+    null, never []), so existing wait output stays byte-identical.
     """
     result: Dict[str, Any] = {"found": found}
     if node_id is not None:
@@ -365,6 +380,10 @@ def format_wait(
     result["timeout"] = timeout
     if transient:
         result["transient"] = True
+    if role_drift:
+        result["role_drift"] = [
+            {"id": c.id, "role": c.role, "name": c.name} for c in role_drift
+        ]
     return json.dumps(result, indent=2)
 
 

@@ -705,9 +705,20 @@ class TestWaitAbsentArchitecture:
                     )
 
     def test_wait_result_fields(self) -> None:
-        """ARCH-02: WaitResult fields are found, timeout, id, transient."""
+        """ARCH-02: WaitResult fields are found, timeout, id, transient, role_drift.
+
+        AIYES-114 (C4a) mandatorily added the role_drift diagnostic field.
+        This closed-world assertion is updated to the new EXACT field set;
+        it stays an exact-set equality so any future unexpected field is caught.
+        """
         import dataclasses
 
         fields = {f.name: f.type for f in dataclasses.fields(WaitResult)}
-        assert set(fields.keys()) == {"found", "timeout", "id", "transient"}
+        assert set(fields.keys()) == {
+            "found",
+            "timeout",
+            "id",
+            "transient",
+            "role_drift",
+        }
         assert fields["found"] == "bool"

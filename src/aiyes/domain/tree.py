@@ -217,6 +217,55 @@ def flatten_scoped_subtrees(ancestors: List[Node]) -> List[Node]:
 
 
 @dataclasses.dataclass(frozen=True)
+class RoleDriftCandidate:
+    """A node whose name matches the requested pattern but under a DIFFERENT
+    role than requested (AIYES-114).
+
+    Surfaced as a diagnostic hint on a zero-match ``find`` / a "never matched"
+    ``wait`` timeout. The ``{id, role, name}`` shape mirrors ``AncestorRef`` so
+    every presenter / MCP / scenario surface stays shape-consistent. ``role`` is
+    the node's ACTUAL (drifted) role. This is a diagnostic only: it never changes
+    what find/wait match or select and never auto-selects.
+    """
+
+    id: str
+    role: str
+    name: str
+
+
+def find_role_drift(
+    nodes: List[Node],
+    role: str,
+    name_pattern: Optional[str],
+) -> Tuple[RoleDriftCandidate, ...]:
+    """Shared role-drift detector (AIYES-114) — one definition, used by BOTH
+    the find and wait use cases.
+
+    Returns, in input (pre-order / stable) order, a ``RoleDriftCandidate`` for
+    every node in ``nodes`` whose name ``name_matches`` ``name_pattern`` AND
+    whose role != the requested ``role``. Self-guards to ``()`` immediately when
+    ``role == "*"`` or ``name_pattern`` is falsy (None/empty) — drift is only
+    meaningful when an exact role and a fixed name are the axes of comparison.
+
+    A node whose role ALREADY equals the requested role is never a candidate (by
+    the ``n.role != role`` construction) — this is why a state-only miss can
+    never produce a false-positive role-drift diagnostic. The ``state`` axis is
+    deliberately ignored: role drift is orthogonal to state. Pure: stdlib +
+    aiyes.domain only.
+    """
+    if role == "*" or not name_pattern:
+        return ()
+
+    from aiyes.domain.matching import name_matches
+
+    return tuple(
+        RoleDriftCandidate(id=n.id, role=n.role, name=n.name)
+        for n in nodes
+        if n.role != role and name_matches(n.name, name_pattern)
+    )
+
+
+@dataclasses.dataclass(frozen=True)
 class TreeDiff:
     """A single difference between two trees."""
 

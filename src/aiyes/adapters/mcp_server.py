@@ -763,6 +763,7 @@ def _build_dispatch_table(
             timeout=result.timeout,
             node_id=result.id,
             transient=result.transient,
+            role_drift=result.role_drift,
         )
 
     def _handle_wait_stable(
