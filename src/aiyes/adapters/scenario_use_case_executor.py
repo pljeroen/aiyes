@@ -14,7 +14,14 @@ from typing import Any, Optional
 from aiyes.domain.matching import name_matches, normalize_whitespace
 from aiyes.domain.scenario import _VALID_DIRECTIONS, ScenarioStep
 from aiyes.domain.scenario_assertions import evaluate_scenario_assertion
-from aiyes.domain.tree import AccessibilityTree, flatten_nodes
+from aiyes.domain.tree import (
+    AccessibilityTree,
+    _node_actions,
+    _node_role,
+    _node_scrollable,
+    _node_states,
+    flatten_nodes,
+)
 from aiyes.ports.scenario_executor import ScenarioStepExecutionResult
 
 _NO_PROGRESS_ATTEMPT_LIMIT = 2
@@ -1361,30 +1368,12 @@ def _candidate_nodes(value: Any) -> list[Any]:
     return [value]
 
 
-def _node_role(value: Any) -> str:
-    if isinstance(value, Mapping):
-        raw = value.get("role", "")
-    else:
-        raw = getattr(value, "role", "")
-    return str(raw) if raw else ""
-
-
 def _node_name(value: Any) -> str:
     if isinstance(value, Mapping):
         raw = value.get("name", "")
     else:
         raw = getattr(value, "name", "")
     return str(raw) if raw else ""
-
-
-def _node_actions(value: Any) -> tuple[str, ...]:
-    if isinstance(value, Mapping):
-        raw = value.get("actions", ())
-    else:
-        raw = getattr(value, "actions", ())
-    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
-        return ()
-    return tuple(str(action) for action in raw)
 
 
 def _role_drift_compatible(value: Any, requested_role: str) -> bool:
@@ -1514,30 +1503,6 @@ def _walk_tree_nodes(nodes: Sequence[Any]) -> list[Any]:
         if isinstance(children, Sequence) and not isinstance(children, (str, bytes)):
             flattened.extend(_walk_tree_nodes(children))
     return flattened
-
-
-def _node_scrollable(value: Any) -> bool:
-    role = _node_role(value).lower()
-    if "scroll" in role or role in {"list", "listview", "recyclerview"}:
-        return True
-    states = _node_states(value)
-    if "scrollable" in states:
-        return True
-    if isinstance(value, Mapping):
-        raw = value.get("scrollable")
-        if raw is True or (isinstance(raw, str) and raw.lower() == "true"):
-            return True
-    return any(action.lower() == "scroll" for action in _node_actions(value))
-
-
-def _node_states(value: Any) -> tuple[str, ...]:
-    if isinstance(value, Mapping):
-        raw = value.get("states", ())
-    else:
-        raw = getattr(value, "states", ())
-    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
-        return ()
-    return tuple(str(state).lower() for state in raw)
 
 
 def _node_stable_id(value: Any) -> str:

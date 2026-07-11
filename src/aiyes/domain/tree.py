@@ -6,7 +6,8 @@ Includes pruning logic for noise node removal and depth limiting.
 from __future__ import annotations
 
 import dataclasses
-from typing import Dict, List, Optional, Set, Tuple
+from collections.abc import Mapping, Sequence
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 # Roles that are always excluded during pruning.
@@ -575,3 +576,53 @@ def enrich_tree(tree: AccessibilityTree) -> AccessibilityTree:
         for i, root in enumerate(tree.roots)
     )
     return AccessibilityTree(roots=enriched_roots)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Node-field predicates (pure — operate on role/states/actions fields of a
+# domain Node OR an equivalent Mapping / attribute-bearing value). Shared by
+# the scenario executor and the Android action adapter; kept here so a pure
+# predicate over Node fields lives in the domain layer rather than an adapter.
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _node_role(value: Any) -> str:
+    if isinstance(value, Mapping):
+        raw = value.get("role", "")
+    else:
+        raw = getattr(value, "role", "")
+    return str(raw) if raw else ""
+
+
+def _node_states(value: Any) -> tuple[str, ...]:
+    if isinstance(value, Mapping):
+        raw = value.get("states", ())
+    else:
+        raw = getattr(value, "states", ())
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+        return ()
+    return tuple(str(state).lower() for state in raw)
+
+
+def _node_actions(value: Any) -> tuple[str, ...]:
+    if isinstance(value, Mapping):
+        raw = value.get("actions", ())
+    else:
+        raw = getattr(value, "actions", ())
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+        return ()
+    return tuple(str(action) for action in raw)
+
+
+def _node_scrollable(value: Any) -> bool:
+    role = _node_role(value).lower()
+    if "scroll" in role or role in {"list", "listview", "recyclerview"}:
+        return True
+    states = _node_states(value)
+    if "scrollable" in states:
+        return True
+    if isinstance(value, Mapping):
+        raw = value.get("scrollable")
+        if raw is True or (isinstance(raw, str) and raw.lower() == "true"):
+            return True
+    return any(action.lower() == "scroll" for action in _node_actions(value))

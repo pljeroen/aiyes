@@ -176,6 +176,7 @@ class _LazyAndroidAdapters:
             self._input = AdbInputAdapter()
             self._screenshot = AdbScreenshotAdapter()
             self._action.set_tree_adapter(self._tree)
+            self._action.set_native_scroll(_android_native_scroll)
 
     @property
     def tree(self) -> AndroidUiAutomatorTreeAdapter:

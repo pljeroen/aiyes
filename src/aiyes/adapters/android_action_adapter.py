@@ -8,13 +8,17 @@ Uses only stdlib: subprocess.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from typing import List, Optional, Tuple
 
 from aiyes.adapters.adb_text import escape_text_for_adb
 from aiyes.domain.node_id import NodeIdRegistry
-from aiyes.domain.tree import Node, flatten_nodes
+from aiyes.domain.tree import Node, _node_scrollable, flatten_nodes
 from aiyes.domain.types import ActionPortResult
+from aiyes.ports.native_scroll import NativeScrollPort
+
+logger = logging.getLogger(__name__)
 
 
 def _get_serial(session) -> str:
@@ -81,6 +85,7 @@ class AndroidActionAdapter:
 
     def __init__(self) -> None:
         self._tree_adapter = None
+        self._native_scroll: Optional[NativeScrollPort] = None
 
     def do_action(
         self,
@@ -232,6 +237,31 @@ class AndroidActionAdapter:
         elif action_name == "scroll":
             if target_node is not None:
                 cx, cy = _bounds_center(target_node.bounds)
+                # Native accessibility tier: attempted only when a native scroll
+                # port was wired AND the resolved node is scrollable. On success
+                # we skip the blind swipe entirely; any fallback (unsuccessful
+                # result or raised exception) is surfaced at DEBUG and drops
+                # through to the unchanged swipe path below.
+                if self._native_scroll is not None and _node_scrollable(target_node):
+                    try:
+                        native_result = self._native_scroll.scroll(
+                            session, node_id, "down"
+                        )
+                    except Exception as exc:  # native failure must never propagate
+                        logger.debug(
+                            "native scroll raised, falling back to swipe: %s", exc
+                        )
+                    else:
+                        if native_result.success:
+                            return ActionPortResult(
+                                success=True,
+                                available_actions=available,
+                                action_method="native_scroll",
+                            )
+                        logger.debug(
+                            "native scroll unsuccessful, falling back to swipe: %s",
+                            native_result.fallback_reason,
+                        )
                 # Scroll down by default
                 _run_adb(
                     serial,
@@ -258,3 +288,7 @@ class AndroidActionAdapter:
     def set_tree_adapter(self, tree_adapter) -> None:
         """Set the tree adapter used for node resolution during actions."""
         self._tree_adapter = tree_adapter
+
+    def set_native_scroll(self, native_scroll: NativeScrollPort) -> None:
+        """Set the native scroll port attempted before the swipe fallback."""
+        self._native_scroll = native_scroll
