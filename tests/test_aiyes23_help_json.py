@@ -131,7 +131,7 @@ class TestHelpJsonCommandsArray:
         runner = CliRunner()
         result = runner.invoke(cli, ["help-json"])
         data = json.loads(result.output)
-        assert len(data["commands"]) == 40
+        assert len(data["commands"]) == 44
 
     def test_each_command_has_four_keys(self) -> None:
         """BC-14: Each command entry has exactly name, tool_name, description, parameters."""

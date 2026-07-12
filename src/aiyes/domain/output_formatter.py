@@ -14,7 +14,7 @@ from aiyes.domain.tree import AccessibilityTree, Node
 
 def session_to_dict(session: Session) -> Dict[str, Any]:
     """Convert a Session to a plain dict."""
-    return {
+    result: Dict[str, Any] = {
         "session_id": session.session_id,
         "display": session.display,
         "app_pid": session.app_pid,
@@ -30,6 +30,12 @@ def session_to_dict(session: Session) -> Dict[str, Any]:
         "backend": session.backend,
         "device_serial": session.device_serial,
     }
+    # AIYES-117 (NFR-01): omit-when-None — marionette_port appears only for a
+    # marionette-launched session (is-not-None guard; None is the semantic
+    # default and 0 is not a legal port). Mirrors node_to_dict's omit precedent.
+    if session.marionette_port is not None:
+        result["marionette_port"] = session.marionette_port
+    return result
 
 
 def node_to_dict(

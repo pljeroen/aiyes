@@ -146,7 +146,7 @@ class TestEnumerateCommands:
     def test_enumerate_commands_count_is_38(self) -> None:
         """BC-01: Leaf commands include session capabilities, swipe, goto, reload."""
         result = enumerate_commands(cli)
-        assert len(result) == 40
+        assert len(result) == 44
 
     def test_enumerate_commands_all_commandinfo(self) -> None:
         """BC-01: Every element is a CommandInfo instance."""
@@ -263,6 +263,11 @@ class TestNamingAlgorithm:
             "scenario_preflight",
             "scenario_fixtures",
             "swipe",
+            # AIYES-117 marionette DOM lens (4)
+            "eval",
+            "query_dom",
+            "page_text",
+            "screenshot_selector",
         }
         assert tool_names == expected
 
@@ -577,6 +582,7 @@ class TestSchemaContractAgainstKnownCommands:
             "name",
             "backend",
             "device_serial",
+            "marionette",
             "command",
         }
         assert set(props.keys()) == expected

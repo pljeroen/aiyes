@@ -138,6 +138,7 @@ sudo apt install xvfb xdotool xclip imagemagick at-spi2-core \
 | **control** | action, mouse (move/click/drag/scroll), key, type, do | Drive input |
 | **scenario** | scenario run | Run deterministic release scenario files and optional evidence bundles |
 | **interaction** | clipboard (read/write), gesture (pinch/scroll), navigate, menu, goto, reload | Platform-specific actions |
+| **browser DOM lens** | eval, query-dom, page-text, screenshot-selector | Firefox/Marionette CSS + JS + visual QA (launch-time opt-in) |
 | **diagnostics** | doctor, debug-bundle, screenshot, mcp-manifest, help-json | System checks and introspection |
 
 Run `aieyes --help` or `aieyes <command> --help` for full usage.
@@ -151,6 +152,39 @@ but is not a hard cross-browser guarantee. If the address bar cannot be located
 or focused, `goto` reports a structured error and sends no keystrokes rather
 than typing into the wrong control. `reload` performs a cache-bypassing hard
 reload (Ctrl+Shift+R).
+
+### Firefox DOM lens (`eval` / `query-dom` / `page-text` / `screenshot-selector`)
+
+The DOM lens sees what the accessibility tree cannot — pure-visual `<div>`s,
+computed CSS, and rendered prose — for CSS/visual QA of your own web apps. It is
+a **launch-time opt-in**: start a Firefox session with `--marionette`
+(`aieyes session start --marionette -- firefox`) and aieyes allocates a distinct
+Marionette port per session and splices `-marionette` into the launch. The opt-in
+cannot be retrofitted onto a running session — restart with `--marionette`. It is
+firefox/linux only; a non-Firefox command with `--marionette` is rejected, and on
+any non-marionette session the four lens commands return a structured
+`status: "error"` naming the fix and perform zero browser I/O.
+
+- `eval <script>` runs operator JavaScript in the page **content context** (never
+  the privileged chrome context) and returns its JSON value; a bare expression is
+  auto-wrapped so it yields a value, and a JavaScript exception maps to
+  `status: "error"` (never a crash).
+- `query-dom <css>` returns a measured, structured view of the matched elements —
+  `getBoundingClientRect` plus a fixed 15-property computed-style subset,
+  `classList`, and `textContent` — with the true match `count`, the node list
+  capped at 50, and a `truncated` flag. An empty match is `status: "ok"`, not an
+  error.
+- `page-text [css]` reads rendered `innerText` (the whole `document.body` by
+  default, or a scoped selector with a `found` flag).
+- `screenshot-selector <css>` captures a native element screenshot (scrolled into
+  view), stores it via the session screenshot store, and returns its `path` plus
+  `width`/`height`.
+
+Marionette state is discoverable on both surfaces: `session capabilities` (static:
+does the backend support the lens) and `session status` (per-session runtime: is
+**this** session marionette-launched, on what port) each report top-level
+`marionette_enabled` and `marionette_port` (the port omitted when the session is
+not marionette-launched).
 
 `find` accepts two optional flags, `--within-name` and `--within-role`, that
 restrict the search to the descendants of a matching ancestor (for example a

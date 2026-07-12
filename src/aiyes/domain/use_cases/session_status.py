@@ -23,6 +23,11 @@ class SessionStatusResult:
     app_alive: bool
     app_foreground: bool
     display_alive: bool
+    # AIYES-117 (DEC-A7-05 / C-STATESURFACE): per-session marionette runtime state,
+    # mirroring session_capabilities. Appended, defaulted (None/False when the
+    # session was not marionette-launched).
+    marionette_enabled: bool = False
+    marionette_port: Optional[int] = None
 
 
 class SessionStatusUseCase:
@@ -74,10 +79,13 @@ class SessionStatusUseCase:
         else:
             app_foreground = self._check_linux_foreground(session)
 
+        marionette_port = getattr(session, "marionette_port", None)
         return SessionStatusResult(
             app_alive=app_alive,
             app_foreground=app_foreground,
             display_alive=display_alive,
+            marionette_enabled=marionette_port is not None,
+            marionette_port=marionette_port,
         )
 
     def _check_linux_foreground(self, session: object) -> bool:

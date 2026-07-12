@@ -72,6 +72,11 @@ def format_session_capabilities(result: SessionCapabilitiesResult) -> str:
         "backend": result.backend,
         "capabilities": capabilities,
     }
+    # AIYES-117 (C-STATESURFACE): marionette_enabled unconditional (always a
+    # meaningful bool); marionette_port omit-when-None (NFR-01 convention).
+    output["marionette_enabled"] = result.marionette_enabled
+    if result.marionette_port is not None:
+        output["marionette_port"] = result.marionette_port
     if result.live_probe is not None:
         output["live_probe"] = {
             "backend": result.live_probe.backend,
@@ -508,13 +513,23 @@ def format_session_status(
     app_alive: bool,
     app_foreground: bool,
     display_alive: bool,
+    marionette_enabled: bool = False,
+    marionette_port: Optional[int] = None,
 ) -> str:
-    """Convert session status result to JSON string."""
+    """Convert session status result to JSON string.
+
+    marionette_enabled/marionette_port are Optional-defaulted so pre-existing
+    3-kwarg callers keep working (C-BACKCOMPAT); marionette_enabled is emitted
+    unconditionally and marionette_port omit-when-None (NFR-01).
+    """
     result: Dict[str, Any] = {
         "app_alive": app_alive,
         "app_foreground": app_foreground,
         "display_alive": display_alive,
+        "marionette_enabled": marionette_enabled,
     }
+    if marionette_port is not None:
+        result["marionette_port"] = marionette_port
     return json.dumps(result, indent=2)
 
 
@@ -607,6 +622,112 @@ def format_reload_result(
         "session_id": session_id,
         "action": action,
     }
+    if reason is not None:
+        result["reason"] = reason
+    return json.dumps(result, indent=2)
+
+
+# ─── AIYES-117 DOM-lens result serializers (omit-when-None optionals) ───
+
+
+def format_eval_result(
+    status: str,
+    session_id: str,
+    action: str = "eval",
+    value: Any = None,
+    reason: Optional[str] = None,
+) -> str:
+    """Convert eval result to JSON string (value is the JSON payload; may be null)."""
+    result: Dict[str, Any] = {
+        "status": status,
+        "session_id": session_id,
+        "action": action,
+        "value": value,
+    }
+    if reason is not None:
+        result["reason"] = reason
+    return json.dumps(result, indent=2)
+
+
+def format_query_dom_result(
+    status: str,
+    session_id: str,
+    selector: Optional[str] = None,
+    count: int = 0,
+    nodes: Any = (),
+    truncated: bool = False,
+    action: str = "query_dom",
+    reason: Optional[str] = None,
+) -> str:
+    """Convert query_dom result to JSON string (measured node views)."""
+    result: Dict[str, Any] = {
+        "status": status,
+        "session_id": session_id,
+        "action": action,
+        "selector": selector,
+        "count": count,
+        "truncated": truncated,
+        "nodes": [
+            {
+                "rect": dict(node.rect),
+                "computed": dict(node.computed),
+                "classList": list(node.classList),
+                "textContent": node.textContent,
+            }
+            for node in nodes
+        ],
+    }
+    if reason is not None:
+        result["reason"] = reason
+    return json.dumps(result, indent=2)
+
+
+def format_page_text_result(
+    status: str,
+    session_id: str,
+    selector: Optional[str] = None,
+    text: str = "",
+    found: bool = False,
+    action: str = "page_text",
+    reason: Optional[str] = None,
+) -> str:
+    """Convert page_text result to JSON string."""
+    result: Dict[str, Any] = {
+        "status": status,
+        "session_id": session_id,
+        "action": action,
+        "selector": selector,
+        "text": text,
+        "found": found,
+    }
+    if reason is not None:
+        result["reason"] = reason
+    return json.dumps(result, indent=2)
+
+
+def format_screenshot_selector_result(
+    status: str,
+    session_id: str,
+    selector: Optional[str] = None,
+    path: Optional[str] = None,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+    action: str = "screenshot_selector",
+    reason: Optional[str] = None,
+) -> str:
+    """Convert screenshot_selector result to JSON string (optionals omit-when-None)."""
+    result: Dict[str, Any] = {
+        "status": status,
+        "session_id": session_id,
+        "action": action,
+        "selector": selector,
+    }
+    if path is not None:
+        result["path"] = path
+    if width is not None:
+        result["width"] = width
+    if height is not None:
+        result["height"] = height
     if reason is not None:
         result["reason"] = reason
     return json.dumps(result, indent=2)

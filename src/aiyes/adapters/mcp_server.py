@@ -65,6 +65,10 @@ _MCP_OBSERVATION_TOOLS = frozenset(
         "clipboard_read",
         "scenario_preflight",
         "scenario_fixtures",
+        # AIYES-117 DOM-lens read primitives (no page mutation).
+        "query_dom",
+        "page_text",
+        "screenshot_selector",
     )
 )
 
@@ -90,6 +94,8 @@ _MCP_CONTROL_TOOLS = frozenset(
         "goto",
         "reload",
         "scenario_run",
+        # AIYES-117: eval runs arbitrary operator JS — a control surface.
+        "eval",
     )
 )
 
@@ -285,6 +291,10 @@ class ServerDependencies:
     menu_uc: Any
     goto_uc: Any
     reload_uc: Any
+    eval_uc: Any
+    query_dom_uc: Any
+    page_text_uc: Any
+    screenshot_selector_uc: Any
     clock: Any
     operation_log: Any
     resolve_session_id: Any
@@ -527,6 +537,7 @@ def _build_dispatch_table(
             name=args.get("name"),
             backend=args.get("backend", "linux"),
             device_serial=args.get("device_serial"),
+            marionette=args.get("marionette", False),
         )
         return pres().format_session_start(session)
 
@@ -858,6 +869,8 @@ def _build_dispatch_table(
             app_alive=result.app_alive,
             app_foreground=result.app_foreground,
             display_alive=result.display_alive,
+            marionette_enabled=result.marionette_enabled,
+            marionette_port=result.marionette_port,
         )
 
     def _handle_detect_dialog(
@@ -967,6 +980,65 @@ def _build_dispatch_table(
             status=result.status,
             session_id=result.session_id,
             action=result.action,
+            reason=result.reason,
+        )
+
+    def _handle_eval(
+        args: Dict[str, Any], deps: ServerDependencies, session_id: str
+    ) -> str:
+        result = deps.eval_uc.execute(session_id=session_id, script=args["script"])
+        return pres().format_eval_result(
+            status=result.status,
+            session_id=result.session_id,
+            action=result.action,
+            value=result.value,
+            reason=result.reason,
+        )
+
+    def _handle_query_dom(
+        args: Dict[str, Any], deps: ServerDependencies, session_id: str
+    ) -> str:
+        result = deps.query_dom_uc.execute(
+            session_id=session_id, selector=args["selector"]
+        )
+        return pres().format_query_dom_result(
+            status=result.status,
+            session_id=result.session_id,
+            selector=result.selector,
+            count=result.count,
+            nodes=result.nodes,
+            truncated=result.truncated,
+            reason=result.reason,
+        )
+
+    def _handle_page_text(
+        args: Dict[str, Any], deps: ServerDependencies, session_id: str
+    ) -> str:
+        result = deps.page_text_uc.execute(
+            session_id=session_id, selector=args.get("selector")
+        )
+        return pres().format_page_text_result(
+            status=result.status,
+            session_id=result.session_id,
+            selector=result.selector,
+            text=result.text,
+            found=result.found,
+            reason=result.reason,
+        )
+
+    def _handle_screenshot_selector(
+        args: Dict[str, Any], deps: ServerDependencies, session_id: str
+    ) -> str:
+        result = deps.screenshot_selector_uc.execute(
+            session_id=session_id, selector=args["selector"]
+        )
+        return pres().format_screenshot_selector_result(
+            status=result.status,
+            session_id=result.session_id,
+            selector=result.selector,
+            path=result.path,
+            width=result.width,
+            height=result.height,
             reason=result.reason,
         )
 
@@ -1289,6 +1361,30 @@ def _build_dispatch_table(
             session_class="bound",
             presenter=pres,
         ),
+        "eval": ToolHandler(
+            tool_name="eval",
+            use_case_call=_handle_eval,
+            session_class="bound",
+            presenter=pres,
+        ),
+        "query_dom": ToolHandler(
+            tool_name="query_dom",
+            use_case_call=_handle_query_dom,
+            session_class="bound",
+            presenter=pres,
+        ),
+        "page_text": ToolHandler(
+            tool_name="page_text",
+            use_case_call=_handle_page_text,
+            session_class="bound",
+            presenter=pres,
+        ),
+        "screenshot_selector": ToolHandler(
+            tool_name="screenshot_selector",
+            use_case_call=_handle_screenshot_selector,
+            session_class="bound",
+            presenter=pres,
+        ),
         "scenario_run": ToolHandler(
             tool_name="scenario_run",
             use_case_call=_handle_scenario_run,
@@ -1353,6 +1449,10 @@ def main() -> None:
         menu_uc=comp_root.menu_uc,
         goto_uc=comp_root.goto_uc,
         reload_uc=comp_root.reload_uc,
+        eval_uc=comp_root.eval_uc,
+        query_dom_uc=comp_root.query_dom_uc,
+        page_text_uc=comp_root.page_text_uc,
+        screenshot_selector_uc=comp_root.screenshot_selector_uc,
         clock=comp_root.clock,
         operation_log=comp_root.operation_log_adapter,
         resolve_session_id=comp_root.resolve_session_id,

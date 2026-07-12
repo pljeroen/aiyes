@@ -38,6 +38,10 @@ class SessionCapabilitiesResult:
     backend: str
     capabilities: Dict[str, Capability]
     live_probe: Optional["CapabilityProbeReport"] = None
+    # AIYES-117 (DEC-A7-05 / C-STATESURFACE): top-level marionette state — enabled
+    # iff the session was launched with a marionette port. Appended, defaulted.
+    marionette_enabled: bool = False
+    marionette_port: Optional[int] = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -91,11 +95,14 @@ class SessionCapabilitiesUseCase:
         if live and backend == "android" and self._android_probe is not None:
             live_probe = self._android_probe.probe(session)
 
+        marionette_port = getattr(session, "marionette_port", None)
         return SessionCapabilitiesResult(
             session_id=session_id,
             backend=backend,
             capabilities=capabilities,
             live_probe=live_probe,
+            marionette_enabled=marionette_port is not None,
+            marionette_port=marionette_port,
         )
 
 

@@ -1177,8 +1177,9 @@ class TestSchemaCountAfterGroupC:
         assert "debug_bundle" in tool_names
 
         # Scenario agent-usability surfaces add three scenario leaf commands;
-        # AIYES-47 adds top-level swipe; AIYES-112 adds goto + reload.
-        assert len(result) == 40
+        # AIYES-47 adds top-level swipe; AIYES-112 adds goto + reload;
+        # AIYES-117 adds eval + query-dom + page-text + screenshot-selector.
+        assert len(result) == 44
 
 
 class TestMcpDispatchGroupC:
@@ -1208,7 +1209,7 @@ class TestMcpDispatchGroupC:
         deps = self._make_deps()
         server = create_mcp_server(deps)
         tools = await server.list_tools()
-        assert len(tools) == 40
+        assert len(tools) == 44
 
     def _make_deps(self):
         """Build mock ServerDependencies with all required fields."""

@@ -10,6 +10,7 @@ from aiyes.domain.use_cases.session_liveness import is_session_active
 from aiyes.ports.android_app_lifecycle import AndroidAppLifecyclePort
 from aiyes.ports.accessibility import AccessibilityBusPort
 from aiyes.ports.display import DisplayServerPort
+from aiyes.ports.marionette_profile import MarionetteProfilePort
 from aiyes.ports.process import ProcessPort
 from aiyes.ports.storage import SessionRepositoryPort
 
@@ -33,12 +34,14 @@ class SessionStopUseCase:
         process: ProcessPort,
         session_repo: SessionRepositoryPort,
         android_lifecycle: Optional[AndroidAppLifecyclePort] = None,
+        marionette_profile: Optional[MarionetteProfilePort] = None,
     ) -> None:
         self._display_server = display_server
         self._atspi_bus = atspi_bus
         self._process = process
         self._session_repo = session_repo
         self._android_lifecycle = android_lifecycle
+        self._marionette_profile = marionette_profile
 
     def _is_session_active(self, session: object) -> bool:
         """Check if a session is active based on its backend."""
@@ -89,9 +92,13 @@ class SessionStopUseCase:
             serial = getattr(session, "device_serial", None)
             package_name = android_package_name(session)
             if self._android_lifecycle is None:
-                errors.append("android force-stop failed: lifecycle adapter unavailable")
+                errors.append(
+                    "android force-stop failed: lifecycle adapter unavailable"
+                )
             elif not serial or not package_name:
-                errors.append("android force-stop failed: missing device/package identity")
+                errors.append(
+                    "android force-stop failed: missing device/package identity"
+                )
             else:
                 try:
                     self._android_lifecycle.stop_app(serial, package_name)
@@ -114,6 +121,17 @@ class SessionStopUseCase:
                 self._display_server.stop(session.xvfb_pid)
             except Exception as exc:
                 errors.append(f"display_server stop failed: {exc}")
+
+        # AIYES-117: remove the aiyes-owned temp Marionette profile, if any.
+        # No-op for non-marionette sessions and for caller-supplied -profile dirs.
+        if (
+            getattr(session, "marionette_port", None) is not None
+            and self._marionette_profile is not None
+        ):
+            try:
+                self._marionette_profile.cleanup(session.session_id)
+            except Exception as exc:
+                errors.append(f"marionette profile cleanup failed: {exc}")
 
         # Do NOT delete the session directory (preserved for forensics)
 

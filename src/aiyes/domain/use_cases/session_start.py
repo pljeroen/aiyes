@@ -11,6 +11,7 @@ from aiyes.ports.clock import ClockPort
 from aiyes.ports.display import DisplayServerPort
 from aiyes.ports.display_allocator import DisplayAllocatorPort
 from aiyes.ports.accessibility import AccessibilityBusPort
+from aiyes.ports.marionette_profile import MarionetteProfilePort
 from aiyes.ports.process import ProcessPort
 from aiyes.ports.storage import SessionRepositoryPort
 
@@ -62,6 +63,36 @@ def _is_credential_var(name: str) -> bool:
     return any(upper.endswith(suffix) for suffix in _CREDENTIAL_STRIP_SUFFIXES)
 
 
+# AIYES-117 / DEC-A7-02: derive the marionette TCP port from the already-unique
+# X display number. XDisplayAllocatorAdapter hands out a display_num unique per
+# concurrent session, so 2828+display_num is distinct per session for free — no
+# second allocator, no TCP-bind probe (SC-04 distinctness, the binding invariant).
+_MARIONETTE_BASE_PORT = 2828
+
+
+def _is_firefox(app_command: str) -> bool:
+    """Return True when app_command launches Firefox (DEC-A7-03 / A-D2).
+
+    Basename-normalized and tolerant of full paths and common Firefox binary
+    variants (firefox, firefox-esr, firefox-bin, a wrapper path like
+    /usr/lib/firefox/firefox) rather than a brittle bare `== "firefox"`.
+    """
+    base = os.path.basename(app_command).strip().lower()
+    return base == "firefox" or base.startswith("firefox-")
+
+
+def _extract_profile_arg(app_args: List[str]) -> Optional[str]:
+    """Return a caller-supplied ``-profile``/``--profile`` path, or None.
+
+    Pure argv inspection (no I/O). Firefox's ``-profile <dir>`` takes the profile
+    directory as the following token; a bare flag with no value yields None.
+    """
+    for index, token in enumerate(app_args):
+        if token in ("-profile", "--profile") and index + 1 < len(app_args):
+            return app_args[index + 1]
+    return None
+
+
 class SessionStartUseCase:
     """Start a new session: allocate display, launch Xvfb, AT-SPI2 bus, and app."""
 
@@ -73,6 +104,7 @@ class SessionStartUseCase:
         process: ProcessPort,
         session_repo: SessionRepositoryPort,
         clock: ClockPort,
+        marionette_profile: Optional[MarionetteProfilePort] = None,
     ) -> None:
         self._display_server = display_server
         self._allocator = allocator
@@ -80,6 +112,7 @@ class SessionStartUseCase:
         self._process = process
         self._session_repo = session_repo
         self._clock = clock
+        self._marionette_profile = marionette_profile
 
     def execute(
         self,
@@ -91,6 +124,7 @@ class SessionStartUseCase:
         name: Optional[str] = None,
         backend: str = "linux",
         device_serial: Optional[str] = None,
+        marionette: bool = False,
     ) -> Session:
         """Execute the session start sequence.
 
@@ -128,6 +162,7 @@ class SessionStartUseCase:
             color_depth=color_depth,
             wait=wait,
             name=name,
+            marionette=marionette,
         )
 
     def _execute_android(
@@ -191,13 +226,62 @@ class SessionStartUseCase:
         color_depth: int,
         wait: float,
         name: Optional[str],
+        marionette: bool = False,
     ) -> Session:
         """Linux session start — Xvfb + AT-SPI + display allocation."""
+        # AIYES-117: marionette is a firefox-only launch-time opt-in (DEC-A7-04).
+        # Reject a non-firefox app BEFORE any process launch (no side effects,
+        # no session persisted) — surfaced as status='error' at the CLI/MCP
+        # boundary, matching the existing device_serial ValueError convention.
+        if marionette and not _is_firefox(app_command):
+            raise ValueError(
+                "marionette is only supported for Firefox sessions; "
+                f"app_command {app_command!r} is not Firefox"
+            )
+
         display_num = self._allocator.allocate()
         display = f":{display_num}"
 
+        # AIYES-117 / A10-AF-001: derive the distinct marionette port AND make
+        # Firefox actually LISTEN on it. Firefox honours the listen port only via
+        # the `marionette.port` profile preference — a live probe confirmed the
+        # `--marionette-port` CLI arg is ignored (Firefox keeps 2828). So we
+        # provision an isolated profile carrying ONLY that pref through the
+        # MarionetteProfilePort (filesystem I/O stays in the adapter) and pass it
+        # via `-profile`, then splice `-marionette` to enable the server.
+        marionette_port: Optional[int] = None
+        app_args = list(app_args)
+        if marionette:
+            marionette_port = _MARIONETTE_BASE_PORT + display_num
+            if self._marionette_profile is None:
+                raise RuntimeError(
+                    "marionette requested but no MarionetteProfilePort is wired; "
+                    "Firefox cannot be configured to listen on the derived port "
+                    f"{marionette_port}"
+                )
+            existing_profile = _extract_profile_arg(app_args)
+            profile_dir = self._marionette_profile.provision(
+                session_id=session_id,
+                port=marionette_port,
+                existing_profile=existing_profile,
+            )
+            if existing_profile is None:
+                # We created a session-scoped temp profile — point Firefox at it.
+                app_args = ["-profile", profile_dir, *app_args]
+            if "-marionette" not in app_args:
+                app_args = ["-marionette", *app_args]
+
+        def _cleanup_marionette_profile() -> None:
+            # Failure-atomic: drop any aiyes-owned temp profile we created.
+            if marionette and self._marionette_profile is not None:
+                self._marionette_profile.cleanup(session_id)
+
         # Step 2: Start Xvfb
-        xvfb_pid = self._display_server.start(display_num, resolution, color_depth)
+        try:
+            xvfb_pid = self._display_server.start(display_num, resolution, color_depth)
+        except Exception:
+            _cleanup_marionette_profile()
+            raise
 
         # Step 2b: Configure keyboard layout for XKB extension
         self._display_server.configure_keyboard(display)
@@ -207,6 +291,7 @@ class SessionStartUseCase:
             bus_result = self._atspi_bus.start_bus(display)
         except Exception:
             self._display_server.stop(xvfb_pid)
+            _cleanup_marionette_profile()
             raise
 
         atspi_bus_pid = bus_result.pid
@@ -216,6 +301,7 @@ class SessionStartUseCase:
         if not atspi_bus_address or not atspi_bus_address.strip():
             self._atspi_bus.stop_bus(atspi_bus_pid)
             self._display_server.stop(xvfb_pid)
+            _cleanup_marionette_profile()
             raise RuntimeError("AT-SPI2 bus started but returned empty bus address")
 
         # Step 4: Start target application with full host env + a11y overrides.
@@ -294,6 +380,7 @@ class SessionStartUseCase:
             # Clean up Xvfb and AT-SPI2 bus on app launch failure
             self._atspi_bus.stop_bus(atspi_bus_pid)
             self._display_server.stop(xvfb_pid)
+            _cleanup_marionette_profile()
             raise
 
         # Step 5: Wait after app launch
@@ -303,6 +390,7 @@ class SessionStartUseCase:
         if not self._process.is_running(app_pid):
             self._atspi_bus.stop_bus(atspi_bus_pid)
             self._display_server.stop(xvfb_pid)
+            _cleanup_marionette_profile()
             raise RuntimeError(
                 "Application exited during startup wait; session was not created"
             )
@@ -323,6 +411,7 @@ class SessionStartUseCase:
             color_depth=color_depth,
             started_at=started_at,
             backend="linux",
+            marionette_port=marionette_port,
         )
 
         try:
@@ -332,6 +421,7 @@ class SessionStartUseCase:
             self._process.stop(app_pid)
             self._atspi_bus.stop_bus(atspi_bus_pid)
             self._display_server.stop(xvfb_pid)
+            _cleanup_marionette_profile()
             raise
 
         return session

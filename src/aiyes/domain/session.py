@@ -39,6 +39,10 @@ class Session:
     device_serial: Optional[str] = None
     package_name: str = ""
     activity_name: str = ""
+    # AIYES-117: marionette DOM-lens port for firefox/linux sessions launched
+    # with --marionette. Appended LAST (kwargs-safe for existing construction
+    # sites); None for every non-marionette session (Android included).
+    marionette_port: Optional[int] = None
 
     def __post_init__(self) -> None:
         """Validate fields and ensure collection fields are truly immutable."""

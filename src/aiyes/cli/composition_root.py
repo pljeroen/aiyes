@@ -26,10 +26,14 @@ from aiyes.cli.presenter import (  # noqa: F401
     format_diff,
     format_do,
     format_doctor,
+    format_eval_result,
     format_find,
     format_find_nodes,
     format_gesture_result,
     format_goto_result,
+    format_page_text_result,
+    format_query_dom_result,
+    format_screenshot_selector_result,
     format_inspect,
     format_inspect_result,
     format_mcp_manifest,
@@ -68,6 +72,7 @@ from aiyes.adapters.subprocess_adapter import SubprocessAdapter
 from aiyes.adapters.file_session_repository import FileSessionRepository
 from aiyes.adapters.file_tree_store import FileTreeStore
 from aiyes.adapters.file_screenshot_store import FileScreenshotStore
+from aiyes.adapters.file_marionette_profile import FileMarionetteProfile
 from aiyes.adapters.system_clock import SystemClock
 from aiyes.adapters.system_dependency_check import SystemDependencyCheck
 from aiyes.adapters.android_action_adapter import AndroidActionAdapter
@@ -144,6 +149,7 @@ _process = SubprocessAdapter()
 _session_repo = FileSessionRepository()
 _tree_store = FileTreeStore()
 _screenshot_store = FileScreenshotStore()
+_marionette_profile = FileMarionetteProfile()
 _clock = SystemClock()
 _dep_check = SystemDependencyCheck()
 _operation_log = FileOperationLog()
@@ -357,6 +363,7 @@ session_start_uc = SessionStartUseCase(
     process=_process,
     session_repo=_session_repo,
     clock=_clock,
+    marionette_profile=_marionette_profile,
 )
 
 session_stop_uc = SessionStopUseCase(
@@ -365,6 +372,7 @@ session_stop_uc = SessionStopUseCase(
     process=_process,
     session_repo=_session_repo,
     android_lifecycle=_android_lifecycle,
+    marionette_profile=_marionette_profile,
 )
 
 session_list_uc = SessionListUseCase(
@@ -527,6 +535,13 @@ from aiyes.domain.use_cases.navigate import NavigateUseCase  # noqa: E402
 from aiyes.domain.use_cases.menu import MenuUseCase  # noqa: E402
 from aiyes.domain.use_cases.goto import GotoUseCase  # noqa: E402
 from aiyes.domain.use_cases.reload import ReloadUseCase  # noqa: E402
+from aiyes.adapters.marionette_adapter import MarionetteAdapter  # noqa: E402
+from aiyes.domain.use_cases.eval import EvalUseCase  # noqa: E402
+from aiyes.domain.use_cases.query_dom import QueryDomUseCase  # noqa: E402
+from aiyes.domain.use_cases.page_text import PageTextUseCase  # noqa: E402
+from aiyes.domain.use_cases.screenshot_selector import (  # noqa: E402
+    ScreenshotSelectorUseCase,
+)
 
 _xclip = XclipAdapter()
 _adb_clipboard = AdbClipboardAdapter()
@@ -633,6 +648,30 @@ goto_uc = GotoUseCase(
 reload_uc = ReloadUseCase(
     input_port=_dispatching_input,
     session_repo=_session_repo,
+)
+
+# ─── AIYES-117 Marionette DOM-lens (single 1-port/1-adapter pair) ─────
+_marionette = MarionetteAdapter()
+
+eval_uc = EvalUseCase(
+    marionette=_marionette,
+    session_repo=_session_repo,
+)
+
+query_dom_uc = QueryDomUseCase(
+    marionette=_marionette,
+    session_repo=_session_repo,
+)
+
+page_text_uc = PageTextUseCase(
+    marionette=_marionette,
+    session_repo=_session_repo,
+)
+
+screenshot_selector_uc = ScreenshotSelectorUseCase(
+    marionette=_marionette,
+    session_repo=_session_repo,
+    screenshot_store=_screenshot_store,
 )
 
 scenario_run_uc = ScenarioRunUseCase(

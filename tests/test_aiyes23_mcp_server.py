@@ -141,9 +141,9 @@ class TestServerDependencies:
             deps.clock = MagicMock()  # type: ignore[misc]
 
     def test_has_39_fields(self) -> None:
-        """BC-26: Exactly 42 fields after the AIYES-112 goto/reload wiring."""
+        """BC-26: Exactly 46 fields after the AIYES-117 marionette DOM-lens wiring."""
         fields = dataclasses.fields(ServerDependencies)
-        assert len(fields) == 42
+        assert len(fields) == 46
 
     def test_use_case_fields_present(self) -> None:
         """BC-26: Core use case fields are present."""
@@ -218,7 +218,7 @@ class TestListTools:
 
         # Call list_tools handler.
         tools = await server.list_tools()
-        assert len(tools) == 40
+        assert len(tools) == 44
 
     @pytest.mark.asyncio
     async def test_tool_names_match_enumerate_commands(self) -> None:
@@ -918,6 +918,7 @@ class TestSessionStartDispatch:
             name=None,
             backend="linux",
             device_serial=None,
+            marionette=False,
         )
 
         # Verify it's not an error
@@ -1046,6 +1047,8 @@ class TestSessionStatusDispatch:
             app_alive=True,
             app_foreground=True,
             display_alive=True,
+            marionette_enabled=False,
+            marionette_port=None,
         )
         mock_resolve = MagicMock(return_value="test-session")
         mock_clock = MagicMock()
@@ -1077,6 +1080,8 @@ class TestSessionStatusDispatch:
             app_alive=True,
             app_foreground=False,
             display_alive=True,
+            marionette_enabled=False,
+            marionette_port=None,
         )
         mock_resolve = MagicMock(return_value="sess-xyz")
         mock_clock = MagicMock()

@@ -25,6 +25,7 @@ from aiyes.cli.composition_root import (  # noqa: F401
     doctor_uc,
     debug_bundle_uc,
     _diagnostic_log,
+    eval_uc,
     find_uc,
     format_action,
     format_clipboard_read,
@@ -33,11 +34,15 @@ from aiyes.cli.composition_root import (  # noqa: F401
     format_diff,
     format_do,
     format_doctor,
+    format_eval_result,
     format_gesture_result,
     format_goto_result,
     format_mcp_manifest,
     format_menu_result,
+    format_page_text_result,
+    format_query_dom_result,
     format_reload_result,
+    format_screenshot_selector_result,
     format_inspect_result,
     format_metrics,
     format_navigate_result,
@@ -68,11 +73,14 @@ from aiyes.cli.composition_root import (  # noqa: F401
     metrics_uc,
     mouse_uc,
     navigate_uc,
+    page_text_uc,
+    query_dom_uc,
     reload_uc,
     operation_log_adapter,
     prune_uc,
     resolve_session_id,
     screenshot_uc,
+    screenshot_selector_uc,
     ScenarioEvidencePathCheck,
     scenario_preflight_uc,
     scenario_real_preflight_uc,
@@ -376,6 +384,12 @@ def session_group() -> None:
     default=None,
     help="Android device serial (from adb devices). Required for android backend.",
 )
+@click.option(
+    "--marionette",
+    is_flag=True,
+    default=False,
+    help="Enable the Firefox Marionette DOM lens (firefox/linux only).",
+)
 @click.argument("command", nargs=-1, required=True)
 def session_start(
     resolution: str,
@@ -384,6 +398,7 @@ def session_start(
     name: Optional[str],
     backend: str,
     device_serial: Optional[str],
+    marionette: bool,
     command: Tuple[str, ...],
 ) -> None:
     """Start a new session: -- <command> [args...]."""
@@ -404,6 +419,7 @@ def session_start(
             name=name,
             backend=backend,
             device_serial=device_serial,
+            marionette=marionette,
         )
         sid = session.session_id
         # Start persistent worker (failure is non-fatal)
@@ -1443,6 +1459,8 @@ def session_status_cmd(session_id: Optional[str]) -> None:
                 app_alive=result.app_alive,
                 app_foreground=result.app_foreground,
                 display_alive=result.display_alive,
+                marionette_enabled=result.marionette_enabled,
+                marionette_port=result.marionette_port,
             )
         )
     except Exception as exc:
@@ -1694,6 +1712,134 @@ def reload_cmd(session_id: Optional[str]) -> None:
         sys.exit(1)
     finally:
         _log_operation("reload", sid, t0, exit_code, error)
+
+
+# ─── Marionette DOM lens (AIYES-117) ────────────────────────────────
+
+
+@cli.command("eval")
+@click.option("--session", "session_id", default=None, help="Session ID.")
+@click.argument("script")
+def eval_cmd(session_id: Optional[str], script: str) -> None:
+    """Run operator JavaScript in the Firefox content context and return its value."""
+    t0 = clock.now()
+    sid = ""
+    exit_code = 0
+    error = ""
+    try:
+        sid = resolve_session_id(session_id)
+        result = eval_uc.execute(session_id=sid, script=script)
+        click.echo(
+            format_eval_result(
+                status=result.status,
+                session_id=result.session_id,
+                action=result.action,
+                value=result.value,
+                reason=result.reason,
+            )
+        )
+    except Exception as exc:
+        exit_code = 1
+        error = str(exc)
+        click.echo(format_system_error(str(exc)), err=True)
+        sys.exit(1)
+    finally:
+        _log_operation("eval", sid, t0, exit_code, error)
+
+
+@cli.command("query-dom")
+@click.option("--session", "session_id", default=None, help="Session ID.")
+@click.argument("selector")
+def query_dom_cmd(session_id: Optional[str], selector: str) -> None:
+    """Return a measured, structured view of the elements matching a CSS selector."""
+    t0 = clock.now()
+    sid = ""
+    exit_code = 0
+    error = ""
+    try:
+        sid = resolve_session_id(session_id)
+        result = query_dom_uc.execute(session_id=sid, selector=selector)
+        click.echo(
+            format_query_dom_result(
+                status=result.status,
+                session_id=result.session_id,
+                selector=result.selector,
+                count=result.count,
+                nodes=result.nodes,
+                truncated=result.truncated,
+                reason=result.reason,
+            )
+        )
+    except Exception as exc:
+        exit_code = 1
+        error = str(exc)
+        click.echo(format_system_error(str(exc)), err=True)
+        sys.exit(1)
+    finally:
+        _log_operation("query-dom", sid, t0, exit_code, error)
+
+
+@cli.command("page-text")
+@click.option("--session", "session_id", default=None, help="Session ID.")
+@click.argument("selector", required=False, default=None)
+def page_text_cmd(session_id: Optional[str], selector: Optional[str]) -> None:
+    """Read the page's rendered innerText (whole body, or a scoped CSS selector)."""
+    t0 = clock.now()
+    sid = ""
+    exit_code = 0
+    error = ""
+    try:
+        sid = resolve_session_id(session_id)
+        result = page_text_uc.execute(session_id=sid, selector=selector)
+        click.echo(
+            format_page_text_result(
+                status=result.status,
+                session_id=result.session_id,
+                selector=result.selector,
+                text=result.text,
+                found=result.found,
+                reason=result.reason,
+            )
+        )
+    except Exception as exc:
+        exit_code = 1
+        error = str(exc)
+        click.echo(format_system_error(str(exc)), err=True)
+        sys.exit(1)
+    finally:
+        _log_operation("page-text", sid, t0, exit_code, error)
+
+
+@cli.command("screenshot-selector")
+@click.option("--session", "session_id", default=None, help="Session ID.")
+@click.argument("selector")
+def screenshot_selector_cmd(session_id: Optional[str], selector: str) -> None:
+    """Capture and store a native screenshot of a CSS-selected element."""
+    t0 = clock.now()
+    sid = ""
+    exit_code = 0
+    error = ""
+    try:
+        sid = resolve_session_id(session_id)
+        result = screenshot_selector_uc.execute(session_id=sid, selector=selector)
+        click.echo(
+            format_screenshot_selector_result(
+                status=result.status,
+                session_id=result.session_id,
+                selector=result.selector,
+                path=result.path,
+                width=result.width,
+                height=result.height,
+                reason=result.reason,
+            )
+        )
+    except Exception as exc:
+        exit_code = 1
+        error = str(exc)
+        click.echo(format_system_error(str(exc)), err=True)
+        sys.exit(1)
+    finally:
+        _log_operation("screenshot-selector", sid, t0, exit_code, error)
 
 
 # ─── Menu (GAP-11) ──────────────────────────────────────────────────
