@@ -364,6 +364,7 @@ session_start_uc = SessionStartUseCase(
     session_repo=_session_repo,
     clock=_clock,
     marionette_profile=_marionette_profile,
+    android_lifecycle=_android_lifecycle,
 )
 
 session_stop_uc = SessionStopUseCase(

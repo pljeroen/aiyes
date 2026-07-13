@@ -11,6 +11,7 @@ from aiyes.ports.clock import ClockPort
 from aiyes.ports.display import DisplayServerPort
 from aiyes.ports.display_allocator import DisplayAllocatorPort
 from aiyes.ports.accessibility import AccessibilityBusPort
+from aiyes.ports.android_app_lifecycle import AndroidAppLifecyclePort
 from aiyes.ports.marionette_profile import MarionetteProfilePort
 from aiyes.ports.process import ProcessPort
 from aiyes.ports.storage import SessionRepositoryPort
@@ -105,6 +106,7 @@ class SessionStartUseCase:
         session_repo: SessionRepositoryPort,
         clock: ClockPort,
         marionette_profile: Optional[MarionetteProfilePort] = None,
+        android_lifecycle: Optional[AndroidAppLifecyclePort] = None,
     ) -> None:
         self._display_server = display_server
         self._allocator = allocator
@@ -113,6 +115,7 @@ class SessionStartUseCase:
         self._session_repo = session_repo
         self._clock = clock
         self._marionette_profile = marionette_profile
+        self._android_lifecycle = android_lifecycle
 
     def execute(
         self,
@@ -203,6 +206,25 @@ class SessionStartUseCase:
             package_name, activity_name = parse_android_package_identity(
                 app_command, app_args
             )
+
+            # AIYES-122: post-start device-side liveness parity with _execute_linux.
+            # The host app_pid is the already-dead adb launcher, so instead consult
+            # the DEVICE-side probe. GATED (lifecycle wired AND device_serial AND
+            # package_name) so every non-wired / identity-underivable path is
+            # byte-identical to pre-AIYES-122. Placed BEFORE session_repo.save so a
+            # not-running result raises with committed still False — the AIYES-120
+            # finally best-effort stops the launcher and NO dead session is
+            # persisted (the finally does not delete a saved session). Does NOT
+            # force-stop the package (DEC-122-04).
+            if self._android_lifecycle is not None and device_serial and package_name:
+                if not self._android_lifecycle.is_app_running(
+                    device_serial, package_name
+                ):
+                    raise RuntimeError(
+                        f"Android app '{package_name}' not running after startup "
+                        "wait; session was not created"
+                    )
+
             session = Session(
                 session_id=session_id,
                 app_pid=app_pid,
