@@ -276,157 +276,161 @@ class SessionStartUseCase:
             if marionette and self._marionette_profile is not None:
                 self._marionette_profile.cleanup(session_id)
 
-        # Step 2: Start Xvfb
+        # AIYES-119: unified failure-atomic cleanup. Every resource acquired
+        # inside the guarded region below (Xvfb, AT-SPI2 bus, app process) is
+        # released by a single best-effort finally when the launch does NOT
+        # commit. Sentinel locals record what was actually acquired so a partial
+        # failure only releases what exists; the marionette temp profile is
+        # released via the closure above, whose internal guard suffices.
+        xvfb_pid: Optional[int] = None
+        atspi_bus_pid: Optional[int] = None
+        app_pid: Optional[int] = None
+        committed = False
         try:
+            # Step 2: Start Xvfb
             xvfb_pid = self._display_server.start(display_num, resolution, color_depth)
-        except Exception:
-            _cleanup_marionette_profile()
-            raise
 
-        # Step 2b: Configure keyboard layout for XKB extension
-        try:
+            # Step 2b: Configure keyboard layout for XKB extension
             self._display_server.configure_keyboard(display)
-        except Exception:
-            self._display_server.stop(xvfb_pid)
-            _cleanup_marionette_profile()
-            raise
 
-        # Step 3: Start AT-SPI2 bus
-        try:
+            # Step 3: Start AT-SPI2 bus
             bus_result = self._atspi_bus.start_bus(display)
-        except Exception:
-            self._display_server.stop(xvfb_pid)
-            _cleanup_marionette_profile()
-            raise
+            atspi_bus_pid = bus_result.pid
+            atspi_bus_address = bus_result.bus_address
 
-        atspi_bus_pid = bus_result.pid
-        atspi_bus_address = bus_result.bus_address
+            # Validate bus address is usable
+            if not atspi_bus_address or not atspi_bus_address.strip():
+                raise RuntimeError("AT-SPI2 bus started but returned empty bus address")
 
-        # Validate bus address is usable
-        if not atspi_bus_address or not atspi_bus_address.strip():
-            self._atspi_bus.stop_bus(atspi_bus_pid)
-            self._display_server.stop(xvfb_pid)
-            _cleanup_marionette_profile()
-            raise RuntimeError("AT-SPI2 bus started but returned empty bus address")
+            # Step 4: Start target application with full host env + a11y overrides.
+            # The app needs PATH, HOME, XDG_*, etc. to function correctly.
+            # Accessibility env vars are added/overridden on top of the host env.
 
-        # Step 4: Start target application with full host env + a11y overrides.
-        # The app needs PATH, HOME, XDG_*, etc. to function correctly.
-        # Accessibility env vars are added/overridden on top of the host env.
+            env = os.environ.copy()
 
-        env = os.environ.copy()
+            # R-ISO-01: Strip Wayland variables to prevent display leakage.
+            # On Wayland hosts, these cause apps to connect to the real
+            # compositor instead of the isolated Xvfb session.
+            _wayland_strip_vars = [
+                "WAYLAND_DISPLAY",
+                "WAYLAND_SOCKET",
+                "XDG_SESSION_TYPE",
+                "GDK_BACKEND",
+                "QT_QPA_PLATFORM",
+                "CLUTTER_BACKEND",
+                "SDL_VIDEODRIVER",
+                "MOZ_ENABLE_WAYLAND",
+                "ELM_DISPLAY",
+                "CHROME_HEADLESS",  # R-ATSPI-03: Chromium a11y kill-switch
+                "AT_SPI_BUS_ADDRESS",  # Must not leak host AT-SPI bus
+            ]
 
-        # R-ISO-01: Strip Wayland variables to prevent display leakage.
-        # On Wayland hosts, these cause apps to connect to the real
-        # compositor instead of the isolated Xvfb session.
-        _wayland_strip_vars = [
-            "WAYLAND_DISPLAY",
-            "WAYLAND_SOCKET",
-            "XDG_SESSION_TYPE",
-            "GDK_BACKEND",
-            "QT_QPA_PLATFORM",
-            "CLUTTER_BACKEND",
-            "SDL_VIDEODRIVER",
-            "MOZ_ENABLE_WAYLAND",
-            "ELM_DISPLAY",
-            "CHROME_HEADLESS",  # R-ATSPI-03: Chromium a11y kill-switch
-            "AT_SPI_BUS_ADDRESS",  # Must not leak host AT-SPI bus
-        ]
+            for var in _wayland_strip_vars:
+                env.pop(var, None)
 
-        for var in _wayland_strip_vars:
-            env.pop(var, None)
+            # R-REM-03 + S-03: Strip credential/secret env vars to prevent leakage
+            # into isolated sessions. Uses both explicit list and suffix patterns.
+            credential_vars = [name for name in env if _is_credential_var(name)]
+            for var in credential_vars:
+                env.pop(var, None)
 
-        # R-REM-03 + S-03: Strip credential/secret env vars to prevent leakage
-        # into isolated sessions. Uses both explicit list and suffix patterns.
-        credential_vars = [name for name in env if _is_credential_var(name)]
-        for var in credential_vars:
-            env.pop(var, None)
-
-        # R-ISO-02 + R-ISO-03 + existing a11y overrides:
-        # Force X11 backends, enable software rendering, set a11y vars.
-        env.update(
-            {
-                # Existing: Display + Accessibility
-                "DISPLAY": display,
-                "GTK_MODULES": "gail:atk-bridge",
-                # Qt5/6: AT-SPI bridge may fail to register under Xvfb (known upstream issue)
-                "QT_ACCESSIBILITY": "1",
-                "QT_LINUX_ACCESSIBILITY_ALWAYS_ON": "1",
-                # R-ATSPI-01: Firefox/GTK a11y activation
-                "GNOME_ACCESSIBILITY": "1",
-                # R-ATSPI-02: Chromium/Electron a11y activation
-                "ACCESSIBILITY_ENABLED": "1",
-                # R-ATSPI-04: LibreOffice AT-SPI via gtk3 VCL plugin
-                "SAL_USE_VCLPLUGIN": "gtk3",
-                # R-ATSPI-05: Java AWT non-reparenting WM fix for Xvfb
-                "_JAVA_AWT_WM_NONREPARENTING": "1",
-                # R-ATSPI-03: Isolated session bus — AccessKit discovers
-                # the AT-SPI bus via org.a11y.Bus.GetAddress() on this bus.
-                # Do NOT set AT_SPI_BUS_ADDRESS — let discovery work normally.
-                "DBUS_SESSION_BUS_ADDRESS": atspi_bus_address,
-                # R-ISO-02: Force X11 backend per toolkit
-                "GDK_BACKEND": "x11",
-                "QT_QPA_PLATFORM": "xcb",
-                "SDL_VIDEODRIVER": "x11",
-                "CLUTTER_BACKEND": "x11",
-                "WINIT_UNIX_BACKEND": "x11",
-                "ELM_DISPLAY": "x11",
-                "XDG_SESSION_TYPE": "x11",
-                # R-ISO-03: Software rendering for GPU-less Xvfb
-                "LIBGL_ALWAYS_SOFTWARE": "1",
-                "GALLIUM_DRIVER": "llvmpipe",
-                "MESA_VK_WSI_PRESENT_MODE": "immediate",
-                "WLR_RENDERER": "pixman",
-            }
-        )
-
-        try:
-            app_pid = self._process.start(app_command, app_args, env)
-        except Exception:
-            # Clean up Xvfb and AT-SPI2 bus on app launch failure
-            self._atspi_bus.stop_bus(atspi_bus_pid)
-            self._display_server.stop(xvfb_pid)
-            _cleanup_marionette_profile()
-            raise
-
-        # Step 5: Wait after app launch
-        if wait > 0:
-            self._clock.sleep(wait)
-
-        if not self._process.is_running(app_pid):
-            self._atspi_bus.stop_bus(atspi_bus_pid)
-            self._display_server.stop(xvfb_pid)
-            _cleanup_marionette_profile()
-            raise RuntimeError(
-                "Application exited during startup wait; session was not created"
+            # R-ISO-02 + R-ISO-03 + existing a11y overrides:
+            # Force X11 backends, enable software rendering, set a11y vars.
+            env.update(
+                {
+                    # Existing: Display + Accessibility
+                    "DISPLAY": display,
+                    "GTK_MODULES": "gail:atk-bridge",
+                    # Qt5/6: AT-SPI bridge may fail to register under Xvfb (known upstream issue)
+                    "QT_ACCESSIBILITY": "1",
+                    "QT_LINUX_ACCESSIBILITY_ALWAYS_ON": "1",
+                    # R-ATSPI-01: Firefox/GTK a11y activation
+                    "GNOME_ACCESSIBILITY": "1",
+                    # R-ATSPI-02: Chromium/Electron a11y activation
+                    "ACCESSIBILITY_ENABLED": "1",
+                    # R-ATSPI-04: LibreOffice AT-SPI via gtk3 VCL plugin
+                    "SAL_USE_VCLPLUGIN": "gtk3",
+                    # R-ATSPI-05: Java AWT non-reparenting WM fix for Xvfb
+                    "_JAVA_AWT_WM_NONREPARENTING": "1",
+                    # R-ATSPI-03: Isolated session bus — AccessKit discovers
+                    # the AT-SPI bus via org.a11y.Bus.GetAddress() on this bus.
+                    # Do NOT set AT_SPI_BUS_ADDRESS — let discovery work normally.
+                    "DBUS_SESSION_BUS_ADDRESS": atspi_bus_address,
+                    # R-ISO-02: Force X11 backend per toolkit
+                    "GDK_BACKEND": "x11",
+                    "QT_QPA_PLATFORM": "xcb",
+                    "SDL_VIDEODRIVER": "x11",
+                    "CLUTTER_BACKEND": "x11",
+                    "WINIT_UNIX_BACKEND": "x11",
+                    "ELM_DISPLAY": "x11",
+                    "XDG_SESSION_TYPE": "x11",
+                    # R-ISO-03: Software rendering for GPU-less Xvfb
+                    "LIBGL_ALWAYS_SOFTWARE": "1",
+                    "GALLIUM_DRIVER": "llvmpipe",
+                    "MESA_VK_WSI_PRESENT_MODE": "immediate",
+                    "WLR_RENDERER": "pixman",
+                }
             )
 
-        # Step 6: Create and save session
-        started_at = self._clock.now()
-        session = Session(
-            session_id=session_id,
-            display=display,
-            app_pid=app_pid,
-            app_command=app_command,
-            app_args=tuple(app_args),
-            atspi_bus_pid=atspi_bus_pid,
-            atspi_bus_address=atspi_bus_address,
-            xvfb_pid=xvfb_pid,
-            name=name,
-            resolution=resolution,
-            color_depth=color_depth,
-            started_at=started_at,
-            backend="linux",
-            marionette_port=marionette_port,
-        )
+            app_pid = self._process.start(app_command, app_args, env)
 
-        try:
+            # Step 5: Wait after app launch
+            if wait > 0:
+                self._clock.sleep(wait)
+
+            if not self._process.is_running(app_pid):
+                raise RuntimeError(
+                    "Application exited during startup wait; session was not created"
+                )
+
+            # Step 6: Create and save session
+            started_at = self._clock.now()
+            session = Session(
+                session_id=session_id,
+                display=display,
+                app_pid=app_pid,
+                app_command=app_command,
+                app_args=tuple(app_args),
+                atspi_bus_pid=atspi_bus_pid,
+                atspi_bus_address=atspi_bus_address,
+                xvfb_pid=xvfb_pid,
+                name=name,
+                resolution=resolution,
+                color_depth=color_depth,
+                started_at=started_at,
+                backend="linux",
+                marionette_port=marionette_port,
+            )
+
             self._session_repo.save(session)
-        except Exception:
-            # Failure-atomic: clean up all launched processes on save failure
-            self._process.stop(app_pid)
-            self._atspi_bus.stop_bus(atspi_bus_pid)
-            self._display_server.stop(xvfb_pid)
-            _cleanup_marionette_profile()
-            raise
 
-        return session
+            committed = True
+            return session
+        finally:
+            # Failure-atomic, non-masking release. Runs cleanup ONLY when the
+            # launch did not commit (DEC-119-03) — on success the temp profile
+            # backing the live Firefox and every running resource must persist.
+            # Each release is individually best-effort (DEC-119-02) so a failing
+            # release neither masks the original exception nor blocks the others,
+            # in reverse-acquisition order process -> bus -> xvfb -> profile
+            # (DEC-119-05), each gated on whether the resource was acquired.
+            if not committed:
+                if app_pid is not None:
+                    try:
+                        self._process.stop(app_pid)
+                    except Exception:
+                        pass
+                if atspi_bus_pid is not None:
+                    try:
+                        self._atspi_bus.stop_bus(atspi_bus_pid)
+                    except Exception:
+                        pass
+                if xvfb_pid is not None:
+                    try:
+                        self._display_server.stop(xvfb_pid)
+                    except Exception:
+                        pass
+                try:
+                    _cleanup_marionette_profile()
+                except Exception:
+                    pass
