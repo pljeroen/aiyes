@@ -13,7 +13,8 @@ demands, split into three strata:
     * TAIL-GAP-android-parse-identity  (HIGHEST — the only post-start step with
         an EXTERNALLY-REACHABLE normal-Exception trigger: a non-str ``app_args``
         element reaches ``parse_android_package_identity`` and raises
-        ``AttributeError`` after ``process.start`` returned ``app_pid``; REQ-A)
+        ``ValueError`` (AIYES-121 domain guard) after ``process.start`` returned
+        ``app_pid``; REQ-A)
     * TAIL-GAP-android-sleep           (clock.sleep raises after start; REQ-A)
     * TAIL-GAP-android-now             (clock.now raises after sleep; REQ-A)
     * TAIL-GAP-android-session-construct (Session __post_init__ raises via a
@@ -197,27 +198,31 @@ def _android_stop_calls(process: FakeProcess) -> List[Any]:
 # ═══════════════════════════════════════════════════════════════════════
 # RED — TAIL-GAP-android-parse-identity  (HIGHEST realism; REQ-A)
 #   A non-str app_args element reaches parse_android_package_identity and the
-#   PRODUCTION function raises AttributeError AFTER process.start acquired
-#   app_pid. No fault injection — a real, externally-reachable malformed input.
+#   PRODUCTION function raises ValueError (AIYES-121 domain guard) AFTER
+#   process.start acquired app_pid. No fault injection — a real,
+#   externally-reachable malformed input.
 # ═══════════════════════════════════════════════════════════════════════
 
 
 def test_tail_gap_android_parse_identity_raises_stops_app_pid() -> None:
     """REQ-A (HIGHEST): a non-str ``app_args`` element (``["-n", 42]``) makes the
-    real ``parse_android_package_identity`` raise ``AttributeError`` after
+    real ``parse_android_package_identity`` raise ``ValueError`` (AIYES-121's
+    domain type guard — was ``AttributeError`` pre-AIYES-121) after
     ``process.start`` returned ``app_pid``. The adb-launched ``app_pid`` must be
     stopped before the exception propagates unwrapped.
 
-    RED today: the parse step (session_start.py:196-198) is unguarded — nothing
-    stops ``app_pid``, so ``("stop", app_pid) in process.calls`` fails.
+    AIYES-121 note: the exception TYPE changed (AttributeError -> ValueError); the
+    failure-atomic cleanup this test pins is exception-type-agnostic, so the
+    app_pid-stopped, unwrapped-``__cause__``, and empty-repo assertions are
+    unchanged.
     """
     process = FakeProcess(pid=_APP_PID)
     repo = FakeSessionRepository()
     uc = _make_android_uc(process=process, repo=repo)
 
-    with pytest.raises(AttributeError) as excinfo:
-        # candidates = ["am", "-n", 42] -> the "-n"/42 pair reaches
-        # _split_android_component(42).partition("/") -> AttributeError.
+    with pytest.raises(ValueError, match="42") as excinfo:
+        # candidates = ["am", "-n", 42] -> the "-n"/42 pair reaches the AIYES-121
+        # domain type guard, which raises ValueError naming the element.
         uc.execute(
             app_command="am",
             app_args=["-n", 42],
@@ -226,7 +231,7 @@ def test_tail_gap_android_parse_identity_raises_stops_app_pid() -> None:
             wait=0.0,
         )
 
-    # REQ-C: the AttributeError propagates unwrapped (not chained/wrapped).
+    # REQ-C: the ValueError propagates unwrapped (fresh raise, not chained/wrapped).
     assert excinfo.value.__cause__ is None
     # REQ-A: the acquired app_pid was stopped exactly once before propagation.
     assert _android_stop_calls(process) == [("stop", _APP_PID)]

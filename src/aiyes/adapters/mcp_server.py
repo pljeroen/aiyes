@@ -43,6 +43,28 @@ except ImportError:
 _MCP_MAX_TIMEOUT_SECONDS = 300.0
 _MCP_MAX_INTERVAL_SECONDS = 60.0
 _MCP_MAX_TEXT_CHARS = 10_000
+
+
+def _render_untrusted_scalar(value: object) -> str:
+    """Render a rejected non-``str`` ``command`` value for an error message
+    WITHOUT leaking container/object contents (Rule 22 — secret sanitization).
+
+    Safe scalars (EXACT ``int``/``float``/``bool``/``None`` — their ``repr`` is the
+    trusted C-level built-in) keep their value visible so the boundary error stays
+    actionable (``42``, ``True``, ``None``); every other type —
+    ``dict``/``list``/``tuple``/``set``/``bytes``/custom object, AND ``int``/``float``
+    SUBCLASSES whose ``__repr__`` is attacker-overridable — collapses to a bounded,
+    non-recursive ``<typename>`` placeholder; its payload is never ``repr()``'d, so a
+    secret-bearing value cannot echo credentials into the MCP ``CallToolResult`` text
+    or the persisted ``OperationRecord.error`` sink. The gate is an EXACT-type check,
+    not ``isinstance``, so no subclass can smuggle a crafted ``repr`` past it.
+    Mirrors the domain-layer guard's rule locally so the adapter stays decoupled.
+    """
+    if value is None or type(value) in (bool, int, float):
+        return repr(value)
+    return f"<{type(value).__name__}>"
+
+
 _MCP_MAX_DELAY_MS = 1_000
 
 _MCP_OBSERVATION_TOOLS = frozenset(
@@ -526,8 +548,29 @@ def _build_dispatch_table(
         command = args.get("command", [])
         if not command:
             raise ValueError("command is required for session start")
-        app_command = command[0] if isinstance(command, (list, tuple)) else command
-        app_args = list(command[1:]) if isinstance(command, (list, tuple)) else []
+        # AIYES-121 layer (a): reject malformed ``command`` at the trust boundary,
+        # BEFORE any process.start launch. Covers the non-list/str SCALAR shape
+        # (unreachable/too-late for the domain guard) and fails fast so a
+        # malformed input launches no wasted process.
+        if isinstance(command, (list, tuple)):
+            for index, element in enumerate(command):
+                if not isinstance(element, str):
+                    raise ValueError(
+                        "command elements must be strings; element at index "
+                        f"{index} is {_render_untrusted_scalar(element)} of type "
+                        f"{type(element).__name__}"
+                    )
+            app_command = command[0]
+            app_args = list(command[1:])
+        elif isinstance(command, str):
+            app_command = command
+            app_args = []
+        else:
+            raise ValueError(
+                "command must be a string or a list of strings; "
+                f"got {_render_untrusted_scalar(command)} of type "
+                f"{type(command).__name__}"
+            )
         session = deps.session_start_uc.execute(
             app_command=app_command,
             app_args=app_args,

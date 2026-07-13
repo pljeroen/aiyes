@@ -56,11 +56,46 @@ class Session:
             object.__setattr__(self, "app_args", tuple(self.app_args))
 
 
+def _render_untrusted_scalar(value: object) -> str:
+    """Render a rejected non-``str`` candidate for an error message WITHOUT
+    leaking container/object contents (Rule 22 — secret sanitization).
+
+    Safe scalars (EXACT ``int``/``float``/``bool``/``None`` — their ``repr`` is the
+    trusted C-level built-in) keep their value visible so the actionable scalar
+    errors are unchanged (e.g. ``42``, ``True``, ``None``). Every other type —
+    ``dict``/``list``/``tuple``/``set``/``bytes``/custom object, AND ``int``/``float``
+    SUBCLASSES whose ``__repr__`` is attacker-overridable — collapses to a bounded,
+    non-recursive ``<typename>`` placeholder; its contents are never ``repr()``'d, so
+    a secret-bearing value cannot echo its payload into the error text or the
+    operation-log sink. The gate is an EXACT-type check, not ``isinstance``, so no
+    subclass can smuggle a crafted ``repr`` past it. Pure/stdlib-only.
+    """
+    if value is None or type(value) in (bool, int, float):
+        return repr(value)
+    return f"<{type(value).__name__}>"
+
+
 def parse_android_package_identity(
     app_command: str, app_args: Union[Tuple[str, ...], List[str]]
 ) -> Tuple[str, str]:
-    """Extract Android package/activity identity from common launch commands."""
+    """Extract Android package/activity identity from common launch commands.
+
+    Raises:
+        ValueError: If any candidate (``app_command`` or an ``app_args`` element)
+            is not a ``str``. Centralized type guard so the helpers can assume
+            ``str`` and every caller gets a clean, actionable error instead of a
+            raw ``AttributeError`` from a str-method call on a non-``str`` value.
+            The offending element is rendered via ``_render_untrusted_scalar`` so
+            container/object contents are never leaked into the message (Rule 22).
+    """
     candidates = [app_command] + list(app_args)
+    for index, value in enumerate(candidates):
+        if not isinstance(value, str):
+            raise ValueError(
+                "command elements must be strings; element at index "
+                f"{index} is {_render_untrusted_scalar(value)} of type "
+                f"{type(value).__name__}"
+            )
     for index, value in enumerate(candidates):
         if value in ("-n", "--component") and index + 1 < len(candidates):
             return _split_android_component(candidates[index + 1])
