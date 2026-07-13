@@ -189,33 +189,46 @@ class SessionStartUseCase:
         # Start target app via process port (e.g., adb shell am start)
         app_pid = self._process.start(app_command, app_args, env)
 
-        if wait > 0:
-            self._clock.sleep(wait)
-
-        started_at = self._clock.now()
-        package_name, activity_name = parse_android_package_identity(
-            app_command, app_args
-        )
-        session = Session(
-            session_id=session_id,
-            app_pid=app_pid,
-            app_command=app_command,
-            app_args=tuple(app_args),
-            name=name,
-            started_at=started_at,
-            backend="android",
-            device_serial=device_serial,
-            package_name=package_name,
-            activity_name=activity_name,
-        )
-
+        # AIYES-120: unified failure-atomic cleanup mirroring _execute_linux. The
+        # single resource acquired above (the adb-launched app_pid) is released by
+        # one best-effort finally when the launch does NOT commit. app_pid is
+        # always bound once the try is entered (start raised before the guard if
+        # it raised at all), so no sentinel-None gate is needed.
+        committed = False
         try:
-            self._session_repo.save(session)
-        except Exception:
-            self._process.stop(app_pid)
-            raise
+            if wait > 0:
+                self._clock.sleep(wait)
 
-        return session
+            started_at = self._clock.now()
+            package_name, activity_name = parse_android_package_identity(
+                app_command, app_args
+            )
+            session = Session(
+                session_id=session_id,
+                app_pid=app_pid,
+                app_command=app_command,
+                app_args=tuple(app_args),
+                name=name,
+                started_at=started_at,
+                backend="android",
+                device_serial=device_serial,
+                package_name=package_name,
+                activity_name=activity_name,
+            )
+
+            self._session_repo.save(session)
+
+            committed = True
+            return session
+        finally:
+            # Cleanup runs ONLY when the launch did not commit; the stop is
+            # per-call best-effort so a failing release cannot mask the original
+            # launch exception (non-masking).
+            if not committed:
+                try:
+                    self._process.stop(app_pid)
+                except Exception:
+                    pass
 
     def _execute_linux(
         self,
