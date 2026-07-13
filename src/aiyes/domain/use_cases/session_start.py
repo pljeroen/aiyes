@@ -284,7 +284,12 @@ class SessionStartUseCase:
             raise
 
         # Step 2b: Configure keyboard layout for XKB extension
-        self._display_server.configure_keyboard(display)
+        try:
+            self._display_server.configure_keyboard(display)
+        except Exception:
+            self._display_server.stop(xvfb_pid)
+            _cleanup_marionette_profile()
+            raise
 
         # Step 3: Start AT-SPI2 bus
         try:
