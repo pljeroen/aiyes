@@ -11,7 +11,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from typing import Any, Optional
 
-from aiyes.domain.matching import name_matches, normalize_whitespace
+from aiyes.domain.matching import name_matches, normalize_whitespace, role_matches
 from aiyes.domain.scenario import _VALID_DIRECTIONS, ScenarioStep
 from aiyes.domain.scenario_assertions import evaluate_scenario_assertion
 from aiyes.domain.tree import (
@@ -1737,16 +1737,18 @@ def _selector_candidate_diagnostic(
 ) -> Optional[dict[str, Any]]:
     role = _node_role(node)
     name = _node_name(node)
-    role_matches = requested_role == "*" or role == requested_role
+    requested_role_matches = requested_role == "*" or role_matches(
+        role, requested_role
+    )
     name_matches_requested = name_matches(name, name_pattern)
-    if not role_matches and not name_matches_requested:
+    if not requested_role_matches and not name_matches_requested:
         return None
 
     bounds = _node_bounds(node)
     visible = bounds is not None and _visible_bounds(bounds, viewport)
     actionable = _scroll_target_actionable(node)
     reasons = []
-    if not role_matches:
+    if not requested_role_matches:
         reasons.append("role_mismatch")
     if not name_matches_requested:
         reasons.append("name_mismatch")

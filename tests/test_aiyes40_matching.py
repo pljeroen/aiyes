@@ -388,6 +388,48 @@ class TestFindUseCaseNormalization:
         result = uc.execute("test-s", "push_button", name_pattern="")
         assert len(result) == 2
 
+    def test_canonical_combo_box_matches_raw_atspi_role(self) -> None:
+        """A Firefox raw ``combo box`` role satisfies ``combo_box`` requests."""
+        tree = _tree_with_nodes(
+            [
+                make_node(
+                    "n_combo",
+                    "combo box",
+                    "Search engine",
+                ),
+            ]
+        )
+
+        result = _setup_find_uc(tree).execute(
+            "test-s", "combo_box", name_pattern="Search engine"
+        )
+
+        assert [(node.id, node.role, node.name) for node in result] == [
+            ("n_combo", "combo box", "Search engine")
+        ]
+        assert result.role_drift == ()
+
+    def test_canonical_push_button_matches_raw_atspi_alias(self) -> None:
+        """A Firefox raw ``button`` role satisfies ``push_button`` requests."""
+        tree = _tree_with_nodes(
+            [
+                make_node(
+                    "n_button",
+                    "button",
+                    "Submit",
+                ),
+            ]
+        )
+
+        result = _setup_find_uc(tree).execute(
+            "test-s", "push_button", name_pattern="Submit"
+        )
+
+        assert [(node.id, node.role, node.name) for node in result] == [
+            ("n_button", "button", "Submit")
+        ]
+        assert result.role_drift == ()
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Integration tests: WaitUseCase with normalization

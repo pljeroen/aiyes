@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 from typing import Optional
 
-from aiyes.domain.matching import name_matches
+from aiyes.domain.matching import name_matches, role_matches
 from aiyes.domain.tree import AccessibilityTree, Node, flatten_nodes
 from aiyes.ports.accessibility_action import AccessibilityActionPort
 from aiyes.ports.accessibility_tree import AccessibilityTreePort
@@ -92,7 +92,7 @@ class CompoundDoUseCase:
 
             # Filter by role
             if role != "*":
-                matching = [n for n in all_nodes if n.role == role]
+                matching = [n for n in all_nodes if role_matches(n.role, role)]
             else:
                 matching = list(all_nodes)
 

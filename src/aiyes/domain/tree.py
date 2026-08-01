@@ -180,7 +180,7 @@ def locate_ancestor_nodes(
     Filters an already-flattened node list (e.g. flatten_nodes(tree.roots)) by
     two independent optional predicates:
 
-    - ``within_role``: exact ``node.role == within_role`` match, when given.
+    - ``within_role``: canonical/raw-equivalent role match, when given.
     - ``within_name``: substring/case-insensitive/whitespace-normalized match
       via the existing ``name_matches`` matcher, when given.
 
@@ -188,11 +188,11 @@ def locate_ancestor_nodes(
     predicate does not constrain. Returns matches in the input (pre-order,
     document) order; ``[]`` when nothing matches. Pure — stdlib + domain only.
     """
-    from aiyes.domain.matching import name_matches
+    from aiyes.domain.matching import name_matches, role_matches
 
     matches: List[Node] = []
     for node in nodes:
-        if within_role is not None and node.role != within_role:
+        if within_role is not None and not role_matches(node.role, within_role):
             continue
         if within_name is not None and not name_matches(node.name, within_name):
             continue
@@ -248,25 +248,25 @@ def find_role_drift(
 
     Returns, in input (pre-order / stable) order, a ``RoleDriftCandidate`` for
     every node in ``nodes`` whose name ``name_matches`` ``name_pattern`` AND
-    whose role != the requested ``role``. Self-guards to ``()`` immediately when
-    ``role == "*"`` or ``name_pattern`` is falsy (None/empty) — drift is only
-    meaningful when an exact role and a fixed name are the axes of comparison.
+    whose role is not equivalent to the requested ``role``. Self-guards to
+    ``()`` immediately when ``role == "*"`` or ``name_pattern`` is falsy
+    (None/empty) — drift is only meaningful when an exact role and a fixed
+    name are the axes of comparison.
 
-    A node whose role ALREADY equals the requested role is never a candidate (by
-    the ``n.role != role`` construction) — this is why a state-only miss can
-    never produce a false-positive role-drift diagnostic. The ``state`` axis is
-    deliberately ignored: role drift is orthogonal to state. Pure: stdlib +
-    aiyes.domain only.
+    A node whose role ALREADY matches the requested role is never a candidate
+    — this is why a state-only miss can never produce a false-positive
+    role-drift diagnostic. The ``state`` axis is deliberately ignored: role
+    drift is orthogonal to state. Pure: stdlib + aiyes.domain only.
     """
     if role == "*" or not name_pattern:
         return ()
 
-    from aiyes.domain.matching import name_matches
+    from aiyes.domain.matching import name_matches, role_matches
 
     return tuple(
         RoleDriftCandidate(id=n.id, role=n.role, name=n.name)
         for n in nodes
-        if n.role != role and name_matches(n.name, name_pattern)
+        if not role_matches(n.role, role) and name_matches(n.name, name_pattern)
     )
 
 

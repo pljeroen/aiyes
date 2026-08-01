@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 from typing import List, Optional, Tuple
 
-from aiyes.domain.matching import name_matches
+from aiyes.domain.matching import name_matches, role_matches
 from aiyes.domain.tree import (
     RoleDriftCandidate,
     enrich_tree,
@@ -194,7 +194,7 @@ class FindUseCase:
 
         # Filter by role (wildcard '*' matches all)
         if role != "*":
-            nodes = [n for n in nodes if n.role == role]
+            nodes = [n for n in nodes if role_matches(n.role, role)]
 
         # Filter by name pattern (case-insensitive substring, whitespace-normalized)
         if name_pattern is not None:

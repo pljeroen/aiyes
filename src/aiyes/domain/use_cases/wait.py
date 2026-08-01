@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 from typing import Optional, Tuple
 
-from aiyes.domain.matching import name_matches
+from aiyes.domain.matching import name_matches, role_matches
 from aiyes.domain.tree import RoleDriftCandidate, find_role_drift, flatten_nodes
 from aiyes.ports.accessibility_tree import AccessibilityTreePort
 from aiyes.ports.clock import ClockPort
@@ -102,7 +102,7 @@ class WaitUseCase:
 
             # Filter by role
             if role != "*":
-                nodes = [n for n in nodes if n.role == role]
+                nodes = [n for n in nodes if role_matches(n.role, role)]
 
             # Filter by name pattern (whitespace-normalized)
             if name_pattern is not None:
