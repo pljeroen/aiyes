@@ -247,12 +247,20 @@ def _tool_risk(tool_name: str) -> str:
 
 def _tool_annotations(tool_name: str) -> Any:
     risk = _tool_risk(tool_name)
-    return ToolAnnotations(
+    annotations = ToolAnnotations(
         readOnlyHint=risk == "gui-observation",
         destructiveHint=risk == "gui-control",
         idempotentHint=False,
         openWorldHint=True,
     )
+    for current_name, legacy_name in (
+        ("read_only_hint", "readOnlyHint"),
+        ("destructive_hint", "destructiveHint"),
+        ("idempotent_hint", "idempotentHint"),
+        ("open_world_hint", "openWorldHint"),
+    ):
+        _expose_legacy_mcp_attribute(annotations, current_name, legacy_name)
+    return annotations
 
 
 def _tool_meta(tool_name: str) -> Dict[str, Any]:
@@ -353,6 +361,21 @@ class ToolHandler:
     presenter: Callable
 
 
+def _call_tool_result(content: List[Any], is_error: bool) -> Any:
+    """Build a CallToolResult for current and prior MCP result shapes."""
+    result = CallToolResult(content=content, isError=is_error)
+    return _expose_legacy_mcp_attribute(result, "is_error", "isError")
+
+
+def _expose_legacy_mcp_attribute(
+    result: Any, current_name: str, legacy_name: str
+) -> Any:
+    """Expose a prior MCP SDK field spelling when SDK 2.0 renamed it."""
+    if hasattr(result, current_name) and not hasattr(result, legacy_name):
+        object.__setattr__(result, legacy_name, getattr(result, current_name))
+    return result
+
+
 def create_mcp_server(deps: ServerDependencies) -> "McpServerWrapper":
     """Factory: create an MCP server wired with the given dependencies.
 
@@ -364,12 +387,16 @@ def create_mcp_server(deps: ServerDependencies) -> "McpServerWrapper":
 
     commands = schema_gen.enumerate_commands(main_mod.cli)
     tool_defs = [
-        Tool(
-            name=ci.tool_name,
-            description=ci.description,
-            inputSchema=ci.json_schema,
-            annotations=_tool_annotations(ci.tool_name),
-            _meta=_tool_meta(ci.tool_name),
+        _expose_legacy_mcp_attribute(
+            Tool(
+                name=ci.tool_name,
+                description=ci.description,
+                inputSchema=ci.json_schema,
+                annotations=_tool_annotations(ci.tool_name),
+                _meta=_tool_meta(ci.tool_name),
+            ),
+            "input_schema",
+            "inputSchema",
         )
         for ci in commands
     ]
@@ -393,9 +420,9 @@ def create_mcp_server(deps: ServerDependencies) -> "McpServerWrapper":
         OperationRecord = op_record_mod.OperationRecord
 
         if name not in dispatch:
-            return CallToolResult(
+            return _call_tool_result(
                 content=[TextContent(type="text", text=f"Unknown tool: {name}")],
-                isError=True,
+                is_error=True,
             )
 
         handler = dispatch[name]
@@ -430,9 +457,9 @@ def create_mcp_server(deps: ServerDependencies) -> "McpServerWrapper":
                     deps.operation_log.append(record)
                 except Exception:
                     pass
-                return CallToolResult(
+                return _call_tool_result(
                     content=[TextContent(type="text", text=error_msg)],
-                    isError=True,
+                    is_error=True,
                 )
 
         # Acquire appropriate lock
@@ -450,16 +477,16 @@ def create_mcp_server(deps: ServerDependencies) -> "McpServerWrapper":
                 result_text = await asyncio.to_thread(
                     handler_fn, arguments, deps, session_id
                 )
-                return CallToolResult(
+                return _call_tool_result(
                     content=[TextContent(type="text", text=str(result_text))],
-                    isError=False,
+                    is_error=False,
                 )
             except Exception as exc:
                 exit_code = 1
                 error_msg = str(exc)
-                return CallToolResult(
+                return _call_tool_result(
                     content=[TextContent(type="text", text=str(exc))],
-                    isError=True,
+                    is_error=True,
                 )
             finally:
                 try:
@@ -479,17 +506,36 @@ def create_mcp_server(deps: ServerDependencies) -> "McpServerWrapper":
                 except Exception:
                     pass
 
-    # Also register on an MCP Server instance for transport use
+    # Also register on an MCP Server instance for transport use. MCP SDK 2.0
+    # takes handlers in the constructor, while the prior supported shape
+    # exposes decorator registration methods on the server instance.
     if _MCP_AVAILABLE:
-        mcp_server = Server("aieyes")
+        if hasattr(Server, "list_tools") and hasattr(Server, "call_tool"):
+            mcp_server = Server("aieyes")
 
-        @mcp_server.list_tools()
-        async def _list_tools() -> List[Any]:
-            return await list_tools_handler()
+            @mcp_server.list_tools()
+            async def _list_tools() -> List[Any]:
+                return await list_tools_handler()
 
-        @mcp_server.call_tool()
-        async def _call_tool(name: str, arguments: Dict[str, Any]) -> Any:
-            return await call_tool_handler(name, arguments)
+            @mcp_server.call_tool()
+            async def _call_tool(name: str, arguments: Dict[str, Any]) -> Any:
+                return await call_tool_handler(name, arguments)
+        else:
+            from mcp.types import ListToolsResult
+
+            async def _list_tools(_context: Any, _params: Any) -> Any:
+                return ListToolsResult(tools=await list_tools_handler())
+
+            async def _call_tool(_context: Any, params: Any) -> Any:
+                return await call_tool_handler(
+                    params.name, params.arguments or {}
+                )
+
+            mcp_server = Server(
+                "aieyes",
+                on_list_tools=_list_tools,
+                on_call_tool=_call_tool,
+            )
     else:
         mcp_server = None
 

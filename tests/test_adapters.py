@@ -127,6 +127,26 @@ class TestXvfbAdapterStart:
             cmd_str = " ".join(str(a) for a in cmd)
             assert "16" in cmd_str
 
+    def test_start_rejects_xvfb_exit_with_wslg_socket_diagnostic(self) -> None:
+        """An Xvfb Unix-socket startup failure must never yield a usable PID."""
+        from aiyes.adapters.xvfb_adapter import XvfbAdapter
+
+        adapter = XvfbAdapter()
+        failed_process = MagicMock()
+        failed_process.pid = 42
+        failed_process.poll.return_value = 1
+
+        with patch("subprocess.Popen", return_value=failed_process):
+            with pytest.raises(RuntimeError) as exc_info:
+                adapter.start(99, "1280x1024", 24)
+
+        message = str(exc_info.value)
+        assert "Xvfb" in message
+        assert ":99" in message
+        assert "WSLg" in message
+        assert "unix socket" in message.lower()
+        assert adapter._processes == {}
+
 
 class TestXvfbAdapterStop:
     """XvfbAdapter.stop() terminates Xvfb by PID."""

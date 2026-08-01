@@ -203,6 +203,61 @@ class TestCreateMcpServer:
 
 
 # ===================================================================
+# MCP SDK 2.0 transport registration
+# ===================================================================
+
+
+class TestMcpSdk2TransportHandlers:
+    """The underlying MCP SDK server must expose usable transport handlers."""
+
+    def test_transport_list_tools_handler_returns_wrapper_tools(self) -> None:
+        """SDK 2.0 registers tools/list and preserves wrapper list_tools output."""
+        from mcp.types import ListToolsResult, PaginatedRequestParams
+
+        deps = _make_mock_deps()
+        server = create_mcp_server(deps)
+
+        transport_handler = server.mcp_server.get_request_handler("tools/list")
+        assert transport_handler is not None
+
+        response = asyncio.run(
+            transport_handler.handler(MagicMock(), PaginatedRequestParams())
+        )
+
+        assert isinstance(response, ListToolsResult)
+        assert response.tools == asyncio.run(server.list_tools())
+
+    def test_transport_call_tool_handler_dispatches_known_tool(self) -> None:
+        """SDK 2.0 routes tools/call through the existing wrapper dispatch."""
+        from mcp.types import CallToolRequestParams, CallToolResult
+
+        doctor_uc = MagicMock()
+        doctor_uc.execute.return_value = []
+        clock = MagicMock()
+        clock.now.return_value = 1000.0
+        deps = _make_mock_deps(
+            doctor_uc=doctor_uc,
+            clock=clock,
+            operation_log=MagicMock(),
+        )
+        server = create_mcp_server(deps)
+
+        transport_handler = server.mcp_server.get_request_handler("tools/call")
+        assert transport_handler is not None
+
+        response = asyncio.run(
+            transport_handler.handler(
+                MagicMock(),
+                CallToolRequestParams(name="doctor", arguments={}),
+            )
+        )
+
+        assert isinstance(response, CallToolResult)
+        assert response.isError is False
+        doctor_uc.execute.assert_called_once_with()
+
+
+# ===================================================================
 # BC-17: list_tools returns exactly 23 tools (REQ-AIYES23-035)
 # ===================================================================
 

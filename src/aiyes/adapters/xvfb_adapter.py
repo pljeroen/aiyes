@@ -32,6 +32,14 @@ class XvfbAdapter:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        returncode = process.poll()
+        if isinstance(returncode, int):
+            raise RuntimeError(
+                f"Xvfb failed to start on display :{display_num}: "
+                f"it exited immediately with code {returncode}. "
+                "WSLg is incompatible with the Unix socket required by "
+                "isolated Xvfb displays."
+            )
         self._processes[process.pid] = process
         return process.pid
 
