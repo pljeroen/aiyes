@@ -15,7 +15,15 @@ from aiyes.domain.marionette_outcome import MarionetteScriptOutcome
 
 
 class MarionettePort(Protocol):
-    """Structural port for content-context script execution + element capture."""
+    """Structural port for native navigation, script execution and capture."""
+
+    def refresh(self, session: Any) -> None:
+        """Hard-refresh the current page through Marionette's navigation lifecycle.
+
+        Raises on a webdriver or transport failure. The native Firefox command
+        bypasses cache and waits for navigation completion.
+        """
+        ...
 
     def execute_script(
         self, session: Any, script: str, args: Any = None

@@ -1,6 +1,7 @@
 """Marionette adapter — stdlib TCP client for the Firefox Marionette protocol.
 
-Owns ALL socket / protocol / base64 I/O for the DOM-lens (HC-03 / NFR-02): the
+Owns ALL socket / protocol / base64 I/O for native navigation and the DOM-lens
+(HC-03 / NFR-02): the
 `<byte-length>:<utf8-json>` framing (A-M2), the server hello handshake (A-M1/A-M2),
 the [0,msgId,name,params] / [1,msgId,error,result] command/response array form
 with msgId correlation (A-M3), an idempotent WebDriver session per connection, and
@@ -141,6 +142,16 @@ class MarionetteAdapter:
         self._msg_id = 0
 
     # ---- MarionettePort surface -----------------------------------------
+
+    def refresh(self, session: Any) -> None:
+        """Hard-refresh through Marionette so it owns navigation completion."""
+
+        def work(transport: Any) -> Tuple[Any, Any]:
+            return self._command(transport, "WebDriver:Refresh", {})
+
+        error, _ = self._with_reconnect(session, work)
+        if error:
+            raise RuntimeError(_error_message(error))
 
     def execute_script(
         self, session: Any, script: str, args: Any = None

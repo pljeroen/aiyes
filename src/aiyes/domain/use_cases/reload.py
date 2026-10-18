@@ -1,8 +1,9 @@
 """Reload use case — cache-bypassing hard reload of a linux browser session.
 
-Linux/AT-SPI+xdotool only. Emits exactly one InputPort.key(["ctrl+shift+r"])
-(the browser hard-reload / cache-bypass sequence). On a non-linux backend the
-use case returns a status="error" result and emits ZERO keystrokes.
+A Marionette-enabled session uses native WebDriver refresh so Marionette owns
+navigation completion. Other Linux sessions emit exactly one
+InputPort.key(["ctrl+shift+r"]). On a non-linux backend the use case returns a
+status="error" result and emits ZERO reload operations.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import dataclasses
 from typing import Optional
 
 from aiyes.ports.input import InputPort
+from aiyes.ports.marionette import MarionettePort
 from aiyes.ports.storage import SessionRepositoryPort
 
 
@@ -25,15 +27,17 @@ class ReloadResult:
 
 
 class ReloadUseCase:
-    """Cache-bypassing hard reload of a linux browser session (ctrl+shift+r)."""
+    """Cache-bypassing hard reload of a Linux browser session."""
 
     def __init__(
         self,
         input_port: InputPort,
         session_repo: SessionRepositoryPort,
+        marionette: Optional[MarionettePort] = None,
     ) -> None:
         self._input = input_port
         self._session_repo = session_repo
+        self._marionette = marionette
 
     def execute(self, session_id: str) -> ReloadResult:
         """Hard-reload the current page in the resolved session.
@@ -59,7 +63,14 @@ class ReloadUseCase:
                 ),
             )
 
-        self._input.key(session, ["ctrl+shift+r"])
+        if getattr(session, "marionette_port", None) is not None:
+            if self._marionette is None:
+                raise RuntimeError(
+                    "marionette-enabled session has no Marionette port implementation"
+                )
+            self._marionette.refresh(session)
+        else:
+            self._input.key(session, ["ctrl+shift+r"])
 
         return ReloadResult(
             status="ok",

@@ -646,13 +646,14 @@ goto_uc = GotoUseCase(
     session_repo=_session_repo,
 )
 
+# ─── AIYES-117 Marionette DOM-lens (single 1-port/1-adapter pair) ─────
+_marionette = MarionetteAdapter()
+
 reload_uc = ReloadUseCase(
     input_port=_dispatching_input,
     session_repo=_session_repo,
+    marionette=_marionette,
 )
-
-# ─── AIYES-117 Marionette DOM-lens (single 1-port/1-adapter pair) ─────
-_marionette = MarionetteAdapter()
 
 eval_uc = EvalUseCase(
     marionette=_marionette,
