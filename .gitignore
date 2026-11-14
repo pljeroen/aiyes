@@ -19,6 +19,7 @@ output/
 # Personal workflow files
 CLAUDE.md
 SESSION_HANDOFF*.md
+SESSION_HANDOFF*.yaml
 .hypothesis/
 .claude/
 .codex/
