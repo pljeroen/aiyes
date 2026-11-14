@@ -11,6 +11,12 @@
   - `redundant object` wrapper nodes no longer appear: a default `find` for role `redundant_object` now returns nothing, and their IDs are no longer accepted by `action` after a default `inspect` or `find`. `inspect --no-prune` still shows them.
   - An unnamed `panel` is collapsed only when exactly one child is left after pruning, and that count now includes moved-up children, so an unnamed panel can newly appear or disappear in default output.
   - The first `diff` after a default `inspect` or `find` no longer reports moved-up nodes as added, and now reports `redundant object` nodes as added.
+- **`menu` finds menu bars and menu items on Linux desktop apps**: `menu` matched node roles only in their underscore spelling (`menu_bar`, `menu_item`), while Linux desktop apps report them with spaces (`menu bar`, `menu item`, `check menu item`, `radio menu item`), so paths naming such nodes failed with "Menu item not found". Menu bars, menus and menu items are now found in either spelling.
+- **Visible changes for callers of `menu`** (CLI command and MCP tool):
+  - Paths that failed with "Menu item not found" now activate the item they name. This is a state-changing action for callers that treated the failure as a no-op.
+  - When a found item cannot be activated, for example because it offers none of the actions `menu` sends (`click`, `Press`, `ShowMenu`), `menu` now exits with an error naming the item and the actions it offers, and acts on no later segment. Before, it reported `"status": "ok"`. `menu` still does not check whether the app carried out an activation: an item that offers the action but that the app does not act on, for example a disabled item, is treated as activated, so `menu` goes on with the next segment and can still report `"status": "ok"`.
+  - Items that offer `Press` or `ShowMenu` instead of `click` (Qt Widgets apps) are now activated with that action. Items that offer `click` still receive `click`.
+  - Every segment after the first is looked up only inside the menu named by the segment before it. A path whose item exists only in another menu now fails as not found instead of activating the other menu's item, and a submenu name shared by several menus now resolves to the one inside the named menu.
 
 ## [0.2.0] - 2026-05-08
 

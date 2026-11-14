@@ -377,6 +377,21 @@ aieyes menu Edit.Preferences
 aieyes menu View.Zoom.200%
 ```
 
+Each segment is opened in turn, and the item named by the last segment is activated as if clicked. This changes the app's state: `aieyes menu File.Save` saves.
+
+Each segment after the first is looked up only inside the menu named by the segment before it, so a same-named item in another menu is never used. `Window.Close` activates the `Close` item of the `Window` menu even when `File` also has a `Close` item. A path whose item exists only in another menu fails as not found: `Window.Save` fails when only `File` has a `Save` item.
+
+On failure the command prints an error and exits with code 1:
+
+- An item that cannot be found: the error names the missing segment and the path, for example `Menu item not found: 'Save' in path 'Window.Save' — the submenu may not have appeared yet`.
+- An item that is found but cannot be activated, for example because it offers none of the actions `menu` sends (`click`, `Press`, `ShowMenu`): the error names the item, the path, the action that was tried and the actions the item offers, for example `Menu item 'Save' in path 'File.Save' could not be activated: action 'click' on node 'n_005' did not succeed (available actions: 'SetFocus')`.
+
+In both cases the segments before the failing one may already have been opened.
+
+`menu` does not check whether the app carried out an activation. If the item offers the action but the app does not act on it, for example because the item is disabled, no error is reported: `menu` goes on with the next segment as if the item had been activated, and when this happens on the last segment it prints `"status": "ok"` and exits with code 0.
+
+In some apps the opened menu can stay on screen after the item is activated. This has been observed in Qt Widgets apps.
+
 #### `aieyes gesture pinch X Y SCALE_FACTOR [--session ID]`
 
 Pinch gesture (Android only). Scale > 1 = zoom in, < 1 = zoom out.
