@@ -88,12 +88,14 @@ Canonical names also work directly: `dialog`, `label`, `frame`, `panel`, `menu`,
 
 ### Tree pruning
 
-By default, `inspect` prunes noise from the tree:
-- Nodes with role `filler` or `redundant_object` are removed
-- Unnamed `section` nodes are collapsed (children promoted)
-- Unnamed single-child `panel` nodes are collapsed
+By default, both `inspect` and `find` prune noise from the tree before they return or store it:
+- Nodes with role `filler` or `redundant_object` are removed, whatever their name. Their children are kept: they move up to the removed node's parent, in the removed node's place and in their original order. The raw AT-SPI spelling `redundant object` (with a space) counts as `redundant_object`, so such nodes do not appear in default output either.
+- Unnamed `section` nodes are collapsed (children moved up to the parent).
+- Unnamed `panel` nodes are collapsed when exactly one child is left after their own children have been pruned. An unnamed panel left with no children, or with two or more, is kept.
 
-Use `--no-prune` to get the raw tree.
+Moved-up nodes keep their node IDs, so an ID found by a default `inspect` or `find` can be passed to `action`. `--tree-depth` counts depth in the pruned tree.
+
+Use `inspect --no-prune` to get the raw tree. The `find` command has no `--no-prune` option.
 
 ### Password masking
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Tree pruning keeps the children of removed nodes**: default pruning in `inspect` and `find` removed `filler` and `redundant_object` nodes together with everything under them, so widgets inside such containers (for example in Qt Widgets apps) were missing from default output and could not be found. The children of a removed node are now kept and moved up to its parent. Nodes reported with the raw AT-SPI role `redundant object` (with a space) are now removed too, with their children moved up the same way; before, they stayed in default output.
+- **Visible changes for callers of default (pruned) output**: the output of `inspect` and `find`, and the tree they store for later `action` by node ID, `diff`, `menu` and `screenshot` by node, change accordingly:
+  - Apps with such containers show more nodes, so output is larger. `find` can return more matches, so result counts and the first match can change. Context fields (`parent_role`, `parent_name`, `depth`, `index_in_parent`, `sibling_count`) of nodes next to or below a removed node can change.
+  - IDs of moved-up nodes are now accepted by `action` after a default `inspect` or `find`.
+  - `redundant object` wrapper nodes no longer appear: a default `find` for role `redundant_object` now returns nothing, and their IDs are no longer accepted by `action` after a default `inspect` or `find`. `inspect --no-prune` still shows them.
+  - An unnamed `panel` is collapsed only when exactly one child is left after pruning, and that count now includes moved-up children, so an unnamed panel can newly appear or disappear in default output.
+  - The first `diff` after a default `inspect` or `find` no longer reports moved-up nodes as added, and now reports `redundant object` nodes as added.
+
 ## [0.2.0] - 2026-05-08
 
 ### Added

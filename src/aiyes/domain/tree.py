@@ -9,8 +9,12 @@ import dataclasses
 from collections.abc import Mapping, Sequence
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from aiyes.domain.matching import role_matches
 
-# Roles that are always excluded during pruning.
+
+# Roles that are always removed during pruning, whatever the node's name; the
+# node's children are promoted to its parent. Membership is decided with
+# role_matches, so raw AT-SPI spellings such as "redundant object" count too.
 ALWAYS_EXCLUDED_ROLES = frozenset(
     [
         "filler",
@@ -81,22 +85,34 @@ class AccessibilityTree:
             object.__setattr__(self, "roots", tuple(self.roots))
 
 
+def _is_always_excluded_role(role: str) -> bool:
+    """Return whether ``role`` is an ALWAYS_EXCLUDED_ROLES role.
+
+    Compared with role_matches, so whitespace variants of a member count
+    (``"redundant object"``, ``" filler "``). Case-sensitive.
+    """
+    return any(role_matches(role, excluded) for excluded in ALWAYS_EXCLUDED_ROLES)
+
+
 def _prune_node(node: Node) -> List[Node]:
     """Prune a single node according to pruning rules.
 
-    Returns a list of nodes to replace the input node:
-    - Empty list: node removed entirely (ALWAYS_EXCLUDED_ROLES).
-    - List of children: node removed, children promoted (unnamed section/panel).
+    The node's children are pruned first. Returns a list of nodes to replace
+    the input node:
+    - The pruned children (node removed, children promoted in its place, in
+      order): an ALWAYS_EXCLUDED_ROLES node whatever its name, an unnamed
+      section, or an unnamed panel left with exactly one child after its
+      children were pruned. Empty when no child survives pruning.
     - [node with pruned children]: node kept with recursively pruned children.
     """
-    # Always exclude these roles entirely
-    if node.role in ALWAYS_EXCLUDED_ROLES:
-        return []
-
     # Recursively prune children first
     pruned_children: List[Node] = []
     for child in node.children:
         pruned_children.extend(_prune_node(child))
+
+    # Always-excluded roles: remove node, promote children
+    if _is_always_excluded_role(node.role):
+        return pruned_children
 
     # Unnamed sections: remove node, promote children
     if node.role in _PRUNE_UNNAMED_PROMOTE_CHILDREN and not node.name:
@@ -188,7 +204,7 @@ def locate_ancestor_nodes(
     predicate does not constrain. Returns matches in the input (pre-order,
     document) order; ``[]`` when nothing matches. Pure — stdlib + domain only.
     """
-    from aiyes.domain.matching import name_matches, role_matches
+    from aiyes.domain.matching import name_matches
 
     matches: List[Node] = []
     for node in nodes:
@@ -261,7 +277,7 @@ def find_role_drift(
     if role == "*" or not name_pattern:
         return ()
 
-    from aiyes.domain.matching import name_matches, role_matches
+    from aiyes.domain.matching import name_matches
 
     return tuple(
         RoleDriftCandidate(id=n.id, role=n.role, name=n.name)
