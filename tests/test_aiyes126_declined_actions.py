@@ -1597,6 +1597,60 @@ class TestCommandOutcomes:
         assert message in text
 
 
+# action output for a requested action that is not available on a node that
+# offers no actions (unchanged output).
+_ACTION_NOT_AVAILABLE_OUTPUT = (
+    '{\n  "status": "error",\n  "action": "focus",\n  "target": "n_009",\n'
+    "  \"reason\": \"Action 'focus' not available on node 'n_009'\"\n}\n"
+)
+
+
+class TestActionOnANodeOfferingNoActions:
+    @pytest.mark.parametrize("failure_reason", ["not_enabled", "declined"])
+    def test_error_carries_an_empty_available_actions_list(
+        self, failure_reason: str
+    ) -> None:
+        def use_case() -> ActionUseCase:
+            return _action_uc(_ReasonPort(failure_reason, actions=()))
+
+        cli_result = _invoke_cli("action_uc", use_case(), ["action", "n_009", "focus"])
+        mcp_result = _call_mcp(
+            "action_uc",
+            use_case(),
+            "action",
+            {"node_id": "n_009", "action_name": "focus"},
+        )
+
+        _assert_same_json_on_cli_and_mcp(
+            cli_result,
+            mcp_result,
+            {
+                "status": "error",
+                "action": "focus",
+                "target": "n_009",
+                "reason": _action_reason(failure_reason, "focus", "n_009"),
+                "available_actions": [],
+            },
+        )
+
+    def test_action_that_is_not_available_keeps_its_output(self) -> None:
+        def use_case() -> ActionUseCase:
+            return _action_uc(_ReasonPort(None, actions=()))
+
+        cli_result = _invoke_cli("action_uc", use_case(), ["action", "n_009", "focus"])
+        is_error, text = _call_mcp(
+            "action_uc",
+            use_case(),
+            "action",
+            {"node_id": "n_009", "action_name": "focus"},
+        )
+
+        assert cli_result.exit_code == 0, cli_result.stderr
+        assert cli_result.stdout == _ACTION_NOT_AVAILABLE_OUTPUT
+        assert is_error is False, text
+        assert text == _ACTION_NOT_AVAILABLE_OUTPUT.rstrip("\n")
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Scenario action steps keep their outcome; action_ok catches the error
 # ═══════════════════════════════════════════════════════════════════════

@@ -774,7 +774,8 @@ def _build_dispatch_table(
             action_name=args["action_name"],
             value=args.get("value"),
         )
-        avail = list(result.available_actions) if result.available_actions else None
+        reported = result.reported_actions
+        avail = list(reported) if reported is not None else None
         states = list(result.node_states) if result.node_states else None
         return pres().format_action(
             status=result.status,

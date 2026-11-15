@@ -49,6 +49,25 @@ class ActionResult:
         """Whether the action succeeded (status == 'ok')."""
         return self.status == "ok"
 
+    @property
+    def reported_actions(self) -> Optional[Tuple[str, ...]]:
+        """The node's actions to report with this result, or None for none.
+
+        An error reports the node's actions. When the node offers none, an
+        action that was not sent because the node is not enabled, or that the
+        application declined, reports the empty tuple; an action that is not
+        available reports None.
+        """
+        if self.available_actions:
+            return self.available_actions
+        if (
+            self.available_actions is None
+            or self.status != "error"
+            or self.reason == failed_action_reason(self.action, self.target, None)
+        ):
+            return None
+        return self.available_actions
+
 
 class ActionUseCase:
     """Execute an AT-SPI2 accessibility action on a node."""
