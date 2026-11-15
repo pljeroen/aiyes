@@ -12,7 +12,12 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Optional
 
 from aiyes.domain.matching import name_matches, normalize_whitespace, role_matches
-from aiyes.domain.scenario import _VALID_DIRECTIONS, ScenarioStep
+from aiyes.domain.scenario import (
+    _EXPECT_ANY,
+    _EXPECT_REFUSED,
+    _VALID_DIRECTIONS,
+    ScenarioStep,
+)
 from aiyes.domain.scenario_assertions import evaluate_scenario_assertion
 from aiyes.domain.tree import (
     AccessibilityTree,
@@ -22,6 +27,8 @@ from aiyes.domain.tree import (
     _node_states,
     flatten_nodes,
 )
+from aiyes.domain.use_cases.action import UnknownNodeError
+from aiyes.domain.use_cases.scenario_run import action_refusal_cause_reported
 from aiyes.ports.scenario_executor import ScenarioStepExecutionResult
 
 _NO_PROGRESS_ATTEMPT_LIMIT = 2
@@ -33,6 +40,14 @@ _FC_REQUIRED_FIND_NO_NODES = "required_find_no_nodes"
 
 # AIYES-104 stable step-level wait-family timeout classification code.
 _FC_STEP_TIMEOUT = "step_timeout"
+
+# Stable classification codes of an action step: the action did not report
+# ok, or it went through although the step expected a refusal.
+_FC_ACTION_FAILED = "action_failed"
+_FC_ACTION_NOT_REFUSED = "action_not_refused"
+
+# Error of a step that needs the scenario's session when none is active.
+_NO_SESSION_ERROR = "scenario step requires an active session"
 
 # AIYES-104 wait-family kinds subject to timeout classification.
 _WAIT_FAMILY_KINDS = frozenset(("wait", "wait_stable", "wait_reactive"))
@@ -304,14 +319,38 @@ class ScenarioUseCaseExecutor:
         )
 
     def _execute_action(self, step: ScenarioStep) -> ScenarioStepExecutionResult:
-        """Execute an action step, classifying a consumed-empty source failure.
+        """Execute an action step and classify its outcome by its "expect" value.
 
-        When the action consumes a source step whose output has no usable node
-        id (and no explicit node_id is supplied), the action fails BEFORE
-        invoking the underlying action use case (FC-DIAG-01) with structured
-        diagnostics (FC-DIAG-02..07) and emits LE-01.
+        With "expect" absent or "ok" the step passes only when the action
+        reports "status": "ok"; an error, or a result without a readable
+        status, fails it with action_failed. With "refused" (a negative check)
+        it passes only when the action reports an error whose reason is a
+        refusal cause (a disabled node, or an action the application
+        declined); it fails with action_not_refused when the action went
+        through and with action_failed otherwise, including an action the
+        target does not offer. With "any" (best effort) it passes whatever the
+        action reports, including a source step that gave no node id (while
+        the scenario has an active session) and a node id the stored tree does
+        not contain, and fails with action_failed only on an unreadable result.
+
+        A failed step keeps every key of the action output and adds
+        "failure_code"; a step whose "expect" is "refused" or "any" also
+        carries "expect" in every output, so evidence shows why a step whose
+        action reported an error passed. Each action_failed or
+        action_not_refused failure emits one classification event.
+
+        Steps that cannot attempt the action fail as before, whatever their
+        "expect": a consumed-empty source fails before the action use case is
+        called (unless "expect" is "any") with structured diagnostics; no
+        session, an invalid step and a failing backend fail with the error
+        text and an output that holds only the "expect" marker. The action is
+        called at most once.
         """
         params = step.parameters
+        expect = params.get("expect")
+        marker: dict[str, Any] = (
+            {"expect": expect} if expect in (_EXPECT_REFUSED, _EXPECT_ANY) else {}
+        )
         if not params.get("node_id"):
             source = params.get("source")
             if source:
@@ -322,36 +361,135 @@ class ScenarioUseCaseExecutor:
                 if source_key in self._outputs and not _first_node_id(
                     self._outputs[source_key]
                 ):
-                    return self._consumed_empty_action_failure(
-                        step, source_key, self._outputs[source_key]
+                    if expect == _EXPECT_ANY and not self._session_id:
+                        # Best effort tolerates a target that is not there,
+                        # not a scenario that has no active session.
+                        return ScenarioStepExecutionResult(
+                            step_id=step.id,
+                            status="failed",
+                            output=dict(marker),
+                            error=_NO_SESSION_ERROR,
+                            session_id=self._session_id,
+                        )
+                    return self._consumed_empty_action_result(
+                        step, source_key, self._outputs[source_key], marker
                     )
 
         try:
             output, session_id = self._execute(step)
+        except UnknownNodeError as exc:
+            # The node id is not in the session's stored tree: best effort
+            # tolerates a target that is not there; otherwise the step fails
+            # as for any other exception.
+            if expect == _EXPECT_ANY:
+                tolerated = {"reason": str(exc), **marker}
+                self._outputs[step.id] = tolerated
+                return ScenarioStepExecutionResult(
+                    step_id=step.id,
+                    status="passed",
+                    output=tolerated,
+                    error="",
+                    session_id=self._session_id,
+                )
+            return ScenarioStepExecutionResult(
+                step_id=step.id,
+                status="failed",
+                output=dict(marker),
+                error=str(exc),
+                session_id=self._session_id,
+            )
         except Exception as exc:
             return ScenarioStepExecutionResult(
                 step_id=step.id,
                 status="failed",
-                output={},
+                output=dict(marker),
                 error=str(exc),
                 session_id=self._session_id,
             )
 
-        self._outputs[step.id] = output
+        failure_code = self._action_failure_code(expect, output)
+        if failure_code:
+            failure_output = {**output, "failure_code": failure_code, **marker}
+            self._outputs[step.id] = failure_output
+            self._emit_classification(
+                step.id,
+                failure_code,
+                self._action_summary(step, failure_output, failure_code),
+            )
+            return ScenarioStepExecutionResult(
+                step_id=step.id,
+                status="failed",
+                output=failure_output,
+                error=failure_code,
+                session_id=session_id,
+            )
+
+        passed_output = {**output, **marker}
+        self._outputs[step.id] = passed_output
         return ScenarioStepExecutionResult(
             step_id=step.id,
             status="passed",
-            output=output,
+            output=passed_output,
             error="",
             session_id=session_id,
         )
 
-    def _consumed_empty_action_failure(
+    @staticmethod
+    def _action_failure_code(expect: Any, output: Mapping[str, Any]) -> str:
+        """The failure code of an action step's result, or "" when it passes.
+
+        A result whose status is neither "ok" nor "error" fails under every
+        "expect" value: aiyes cannot tell whether the action happened. Under
+        "refused" an error passes only when its reason reports a refusal cause
+        (a disabled node, or an action the application declined).
+        """
+        status = output.get("status")
+        if status not in ("ok", "error"):
+            return _FC_ACTION_FAILED
+        if expect == _EXPECT_ANY:
+            return ""
+        if expect == _EXPECT_REFUSED:
+            if status == "ok":
+                return _FC_ACTION_NOT_REFUSED
+            if action_refusal_cause_reported(output):
+                return ""
+            return _FC_ACTION_FAILED
+        if status == "ok":
+            return ""
+        return _FC_ACTION_FAILED
+
+    @staticmethod
+    def _action_summary(
+        step: ScenarioStep, output: Mapping[str, Any], failure_code: str
+    ) -> str:
+        """One-line event summary naming the step and the action's reason."""
+        reason = output.get("reason")
+        if isinstance(reason, str) and reason:
+            detail = reason
+        elif failure_code == _FC_ACTION_NOT_REFUSED:
+            detail = "the action went through although a refusal was expected"
+        elif output.get("status") == "error":
+            detail = "the action reported an error without a reason"
+        else:
+            detail = "the action result has no readable status"
+        return f"action {step.id!r} failed ({failure_code}): {detail}"
+
+    def _consumed_empty_action_result(
         self,
         step: ScenarioStep,
         source_key: str,
         source_output: Any,
+        marker: Mapping[str, Any],
     ) -> ScenarioStepExecutionResult:
+        """Record an action whose source step gave no usable node id.
+
+        The action use case is not called. The output carries the classified
+        diagnostics (failure_code empty_source_node_id, the source step, its
+        requested selector and selector diagnostics when it produced them) and
+        the step's "expect" marker. Under "expect": "any" the step passes with
+        that output and emits no event; otherwise it fails with
+        empty_source_node_id and emits one classification event.
+        """
         failure_output: dict[str, Any] = {
             "failure_code": _FC_EMPTY_SOURCE_NODE_ID,
             "source_step_id": source_key,
@@ -376,7 +514,16 @@ class ScenarioUseCaseExecutor:
             diagnostics = source_output.get("selector_diagnostics")
             if diagnostics is not None:
                 failure_output["selector_diagnostics"] = diagnostics
+        failure_output.update(marker)
         self._outputs[step.id] = failure_output
+        if marker.get("expect") == _EXPECT_ANY:
+            return ScenarioStepExecutionResult(
+                step_id=step.id,
+                status="passed",
+                output=failure_output,
+                error="",
+                session_id=self._session_id,
+            )
         self._emit_classification(
             step.id,
             _FC_EMPTY_SOURCE_NODE_ID,
@@ -1167,7 +1314,7 @@ class ScenarioUseCaseExecutor:
 
     def _require_session(self) -> str:
         if not self._session_id:
-            raise RuntimeError("scenario step requires an active session")
+            raise RuntimeError(_NO_SESSION_ERROR)
         return self._session_id
 
     def _resolve_drag_coords(
@@ -1737,9 +1884,7 @@ def _selector_candidate_diagnostic(
 ) -> Optional[dict[str, Any]]:
     role = _node_role(node)
     name = _node_name(node)
-    requested_role_matches = requested_role == "*" or role_matches(
-        role, requested_role
-    )
+    requested_role_matches = requested_role == "*" or role_matches(role, requested_role)
     name_matches_requested = name_matches(name, name_pattern)
     if not requested_role_matches and not name_matches_requested:
         return None

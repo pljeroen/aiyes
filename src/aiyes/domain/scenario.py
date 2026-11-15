@@ -39,6 +39,14 @@ _VALID_STEP_KINDS = frozenset(
     )
 )
 _VALID_DIRECTIONS = frozenset(("up", "down", "left", "right"))
+# Values of the optional "expect" field of an action step. "ok" (the default)
+# passes only when the action reports ok; "refused" is a negative check that
+# passes only when the result shows the target was reached and refused the
+# action; "any" is best effort and passes whatever the action reports.
+_EXPECT_OK = "ok"
+_EXPECT_REFUSED = "refused"
+_EXPECT_ANY = "any"
+_ACTION_EXPECT_VALUES = (_EXPECT_OK, _EXPECT_REFUSED, _EXPECT_ANY)
 _VALID_REACTIVE_CONDITIONS = frozenset(
     (
         "screen-change",
@@ -276,6 +284,7 @@ def _validate_steps(
             )
         if isinstance(kind, str) and kind in _VALID_STEP_KINDS:
             issues.extend(_validate_kind_specific(kind, item, f"{path}[{index}]"))
+            issues.extend(_validate_expect(kind, item, f"{path}[{index}]"))
         if (
             isinstance(step_id, str)
             and _VALID_ID.match(step_id)
@@ -335,6 +344,42 @@ def _validate_kind_specific(
     if kind == "find":
         return _validate_find_step(item, path)
     return ()
+
+
+def _validate_expect(
+    kind: str, item: Mapping[str, Any], path: str
+) -> Tuple[ScenarioValidationIssue, ...]:
+    """Validate the optional "expect" field of a step of a supported kind.
+
+    Only action steps take "expect". On an action step a present value must
+    be exactly one of "ok", "refused" or "any" (case-sensitive, no trimming;
+    null and non-string values are invalid); any other value is rejected with
+    path steps[i].expect and code action_expect_invalid. On a step of any other
+    kind a present "expect" key is rejected with code expect_not_supported,
+    because ignoring it would silently drop the check the author asked for.
+    Keys that only start with "expect" (for example an assertion's
+    expect_present) are not affected.
+    """
+    if "expect" not in item:
+        return ()
+    if kind != "action":
+        return (
+            _issue(
+                f"{path}.expect",
+                "expect_not_supported",
+                f"expect applies to action steps only, not to {kind} steps",
+            ),
+        )
+    expect = item["expect"]
+    if isinstance(expect, str) and expect in _ACTION_EXPECT_VALUES:
+        return ()
+    return (
+        _issue(
+            f"{path}.expect",
+            "action_expect_invalid",
+            'action.expect must be one of "ok", "refused", "any"',
+        ),
+    )
 
 
 def _validate_find_step(

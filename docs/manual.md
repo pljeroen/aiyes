@@ -654,6 +654,7 @@ For aiyes to work well, the target application must expose its GUI through the a
 - Exit code 0 + JSON on stdout = success
 - Exit code 1 + text on stderr = error
 - Semantic failures (e.g., action not available) still return exit 0 with `"status": "error"` in JSON
+- The exit-0 rule for semantic failures applies to the standalone commands: in a scenario run, an action step whose action reports `"status": "error"` fails the step and the run (exit 1) unless the step's `"expect"` field allows that outcome (see `docs/release-scenarios.md`).
 - Always check both exit code and JSON status field
 
 ### Platform differences

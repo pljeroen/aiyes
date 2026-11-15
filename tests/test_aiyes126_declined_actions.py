@@ -14,8 +14,9 @@ These tests pin the resulting behaviour end to end:
   cases turn it into a message that says what happened;
 * CLI and MCP outcomes follow the documented error handling (action, do, goto:
   exit 0 with ``"status": "error"``; menu: exit 1 with the message on stderr);
-* responses outside these cases are unchanged, scenario action steps keep their
-  pass/fail outcome, and the documentation describes the new outcomes.
+* responses outside these cases are unchanged, a scenario action step whose
+  action reports an error fails, and the documentation describes the new
+  outcomes.
 
 All accessibles, state sets and AT-SPI bindings are in-memory doubles, so no
 display, accessibility bus or toolkit is needed.
@@ -1652,7 +1653,7 @@ class TestActionOnANodeOfferingNoActions:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Scenario action steps keep their outcome; action_ok catches the error
+# Scenario action steps fail when the action reports an error
 # ═══════════════════════════════════════════════════════════════════════
 
 
@@ -1706,11 +1707,13 @@ class TestScenarioActionStep:
             )
         )
 
-        assert step.status == "passed"
+        assert (step.status, step.error) == ("failed", "action_failed")
         assert step.output["status"] == "error"
         assert step.output["reason"] == (
             "Action 'click' not sent: node 'n_009' is not enabled"
         )
+        assert step.output.get("failure_code") == "action_failed"
+        assert "expect" not in step.output
         assert check.status == "failed"
         assert check.output["assertion"]["status"] == "failed"
 

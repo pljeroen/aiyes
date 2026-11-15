@@ -31,6 +31,17 @@ def failed_action_reason(
     return f"Action '{action_name}' not available on node '{node_id}'"
 
 
+class UnknownNodeError(RuntimeError):
+    """A node id that the session's stored tree does not contain.
+
+    Raised before the action is sent. It is a RuntimeError with the same
+    message as before, so callers that report any RuntimeError see no
+    difference; callers that must tell this case apart from a missing
+    session, an invalid node id or a failing backend check the type, not
+    the message.
+    """
+
+
 @dataclasses.dataclass(frozen=True)
 class ActionResult:
     """Result of an action execution."""
@@ -96,7 +107,9 @@ class ActionUseCase:
         The reason says whether the node is not enabled, the application
         declined the action, or the action is not available (see
         failed_action_reason).
-        Raises on system errors (no session, invalid node_id, empty node_id).
+        Raises RuntimeError on system errors (no session, empty node_id), and
+        UnknownNodeError (a RuntimeError) for a node_id that the stored tree
+        does not contain.
         """
         # Reject empty/blank node_id before any lookup
         if not node_id or not node_id.strip():
@@ -115,7 +128,7 @@ class ActionUseCase:
             all_nodes = flatten_nodes(tree.roots)
             known_ids = {n.id for n in all_nodes}
             if node_id not in known_ids:
-                raise RuntimeError(
+                raise UnknownNodeError(
                     f"Unknown node_id: {node_id!r} not found in stored tree"
                 )
             # Pass persisted registry for stable node resolution
