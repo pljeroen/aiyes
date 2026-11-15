@@ -269,6 +269,12 @@ aieyes action n_005 toggle
 
 The available actions depend on the node. Check the `actions` field in the tree.
 
+On Linux, `action` does not send an action to a node that is not enabled (a greyed-out widget). It returns `"status": "error"` with a reason saying the node is not enabled, for example `"reason": "Action 'click' not sent: node 'n_003' is not enabled"`. `set_text` on a text field that is not enabled is refused the same way, and the text is not applied.
+
+When the app is asked to act but declines, `action` returns `"status": "error"` with a reason saying the action was declined, for example `"reason": "Action 'focus' on node 'n_007' was declined by the application"`. `focus` on a node that cannot take focus, such as a menu item, is reported this way. An action the node does not offer is reported as not available, as before. In all these cases the exit code is 0.
+
+`"status": "ok"` does not prove that the app acted on the request. On Linux it means the app accepted the request, and an enabled node that accepts a request but does not act on it is reported `"status": "ok"`. For example, `set_text` on a read-only text field is reported `"status": "ok"`: some apps (GTK3) accept it without changing the text, others (Qt Widgets) apply it. aiyes does not check whether a field is editable or read-only.
+
 #### `aieyes mouse move X Y [--session ID]`
 
 Move the mouse cursor to absolute coordinates.
@@ -333,6 +339,16 @@ aieyes do --role button --name Submit --action click --verify
 aieyes do --role textbox --name Username --action set_text --value "admin"
 ```
 
+Whenever the `"action"` object of the output has `"status": "error"`, it also has a `"reason"` with the same text `aieyes action` gives for that case: the node is not enabled, the app declined the action, or the action is not available on the node. For example:
+
+```json
+"action": {"status": "error", "action": "click", "target": "n_009", "reason": "Action 'click' not sent: node 'n_009' is not enabled"}
+```
+
+The exit code is 0 in these cases. A `"reason"` is given on every platform; on Linux it can also say that the node is not enabled or that the app declined the action.
+
+`"status": "ok"` in the `"action"` object does not prove that the app acted on the request, as with `aieyes action`. On Linux, an enabled node that accepts a request but does not act on it is reported `"status": "ok"`, with no `"reason"`; for example `set_text` on a read-only text field that the app (GTK3) accepts without changing the text.
+
 #### `aieyes screenshot [OPTIONS]`
 
 Capture a screenshot.
@@ -385,10 +401,12 @@ On failure the command prints an error and exits with code 1:
 
 - An item that cannot be found: the error names the missing segment and the path, for example `Menu item not found: 'Save' in path 'Window.Save' — the submenu may not have appeared yet`.
 - An item that is found but cannot be activated, for example because it offers none of the actions `menu` sends (`click`, `Press`, `ShowMenu`): the error names the item, the path, the action that was tried and the actions the item offers, for example `Menu item 'Save' in path 'File.Save' could not be activated: action 'click' on node 'n_005' did not succeed (available actions: 'SetFocus')`.
+- An item that is not enabled, such as a disabled item: the action is not sent, and the error names the item, the path and that the node is not enabled, for example `Menu item 'Save' in path 'File.Save' could not be activated: node 'n_005' is not enabled, so action 'click' was not sent (available actions: 'click')`.
+- An item whose activation the app declines: the error names the item, the path and that the action was declined by the application.
 
-In both cases the segments before the failing one may already have been opened.
+In every case the segments before the failing one may already have been opened.
 
-`menu` does not check whether the app carried out an activation. If the item offers the action but the app does not act on it, for example because the item is disabled, no error is reported: `menu` goes on with the next segment as if the item had been activated, and when this happens on the last segment it prints `"status": "ok"` and exits with code 0.
+`menu` does not check the effect of an activation. If an enabled item offers the action and the app accepts it but does not act on it, no error is reported: `menu` goes on with the next segment as if the item had been activated, and when this happens on the last segment it prints `"status": "ok"` and exits with code 0. Other requests that an enabled node accepts without acting on are reported the same way (see `aieyes action`).
 
 In some apps the opened menu can stay on screen after the item is activated. This has been observed in Qt Widgets apps.
 

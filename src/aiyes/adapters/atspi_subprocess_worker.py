@@ -212,6 +212,54 @@ def _search_tree(
     return None
 
 
+# Values of the "failure_reason" key of an action response.
+_NOT_ENABLED = "not_enabled"
+_DECLINED = "declined"
+
+
+def _is_not_enabled(node: object, state_type: Any) -> bool:
+    """Whether the node's AT-SPI state set marks it as not enabled.
+
+    A node is not enabled when its state set contains neither ENABLED nor
+    SENSITIVE, so an empty state set counts as not enabled. A node with
+    SENSITIVE but without ENABLED counts as enabled: the platform documents
+    such a control as still operable by the user. Membership is read with
+    ``contains`` on the state set object, never from a rendered form of the
+    states.
+
+    A state set that cannot be read (``get_state_set`` raises or returns
+    None, or ``contains`` raises) makes the check inconclusive: one
+    ``enabled_check`` warning is written to stderr and the node is treated
+    as enabled, so an unreadable state set never causes a refusal.
+    """
+    try:
+        state_set = node.get_state_set()  # type: ignore[attr-defined]
+    except Exception as exc:
+        _warn("enabled_check", exc)
+        return False
+    if state_set is None:
+        _warn("enabled_check", ValueError("get_state_set() returned None"))
+        return False
+    try:
+        if state_set.contains(state_type.ENABLED):
+            return False
+        return not state_set.contains(state_type.SENSITIVE)
+    except Exception as exc:
+        _warn("enabled_check", exc)
+        return False
+
+
+def _refused(available: List[str], failure_reason: str) -> Dict[str, Any]:
+    """Response for a request that was refused or declined, with its reason."""
+    return {
+        "success": False,
+        "available_actions": available,
+        "node_value": None,
+        "node_states": None,
+        "failure_reason": failure_reason,
+    }
+
+
 def _do_action_impl(
     display: str,
     bus_address: str,
@@ -220,7 +268,24 @@ def _do_action_impl(
     value: Optional[str] = None,
     registry_json: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Find a node and execute an action, return result as dict."""
+    """Find a node and execute an action, return result as dict.
+
+    The result reports ``success`` True only when the application accepted
+    the request: the AT-SPI call that asks it to act (``do_action``,
+    ``Component.grab_focus`` or ``set_text_contents``) returned a truthy
+    value. A truthy value does not show that the application acted on the
+    request: an enabled node that accepts it without acting on it (for
+    example ``set_text_contents`` on a read-only GTK3 text field, which
+    leaves the text unchanged) is reported as success. Before that call, a
+    node that is not enabled (see ``_is_not_enabled``) is refused without
+    asking the application to act. A refused node and a call that returned
+    a falsy value add ``failure_reason`` to the result: ``"not_enabled"``
+    for a refused node, ``"declined"`` for the falsy value.
+    Every other result (node not found, action not offered, a call that
+    raised) carries no ``failure_reason``. For a listed action the offered
+    actions are checked first, so a node that does not offer the action is
+    reported as before whatever its state.
+    """
     _setup_env(display, bus_address)
 
     # Import AFTER env is set
@@ -265,20 +330,26 @@ def _do_action_impl(
 
     # Handle set_text action
     if action_name == "set_text" and value is not None:
-        success = False
+        if _is_not_enabled(node, Atspi.StateType):
+            return _refused(["set_text"], _NOT_ENABLED)
+        # The editable-text interface is asked first; its answer is final.
+        # The accessible's own set_text_contents is used only when that
+        # interface is missing or the call raised.
+        set_result: Optional[bool] = None
         try:
             editable = node.get_editable_text()  # type: ignore[union-attr]
             if editable is not None:
-                editable.set_text_contents(value)
-                success = True
+                set_result = bool(editable.set_text_contents(value))
         except Exception as exc:
             _warn("set_text.editable", exc)
-        if not success:
+        if set_result is None:
             try:
-                node.set_text_contents(value)  # type: ignore[union-attr]
-                success = True
+                set_result = bool(node.set_text_contents(value))  # type: ignore[union-attr]
             except Exception as exc:
                 _warn("set_text.fallback", exc)
+        if set_result is False:
+            return _refused(["set_text"], _DECLINED)
+        success = set_result is True
         # Read back node value after successful set_text
         node_value = None
         if success:
@@ -295,7 +366,8 @@ def _do_action_impl(
 
     # Handle focus action (before generic action resolution)
     if action_name == "focus":
-        focus_success = False
+        # None: no focus call was made, or it raised
+        focus_result: Optional[bool] = None
         # Get available actions
         focus_available: List[str] = []
         try:
@@ -307,12 +379,14 @@ def _do_action_impl(
         except Exception as exc:
             _warn("focus.get_actions", exc)
 
+        if _is_not_enabled(node, Atspi.StateType):
+            return _refused(focus_available, _NOT_ENABLED)
+
         if "focus" in focus_available:
             # Standard path: focus is a listed action
             try:
                 focus_index = focus_available.index("focus")
-                node.do_action(focus_index)  # type: ignore[union-attr]
-                focus_success = True
+                focus_result = bool(node.do_action(focus_index))  # type: ignore[union-attr]
             except Exception as exc:
                 _warn("focus.do_action", exc)
         else:
@@ -320,10 +394,13 @@ def _do_action_impl(
             try:
                 component = node.get_component()  # type: ignore[union-attr]
                 if component is not None:
-                    component.grab_focus()
-                    focus_success = True
+                    focus_result = bool(component.grab_focus())
             except Exception as exc:
                 _warn("focus.grab_focus", exc)
+
+        if focus_result is False:
+            return _refused(focus_available, _DECLINED)
+        focus_success = focus_result is True
 
         # Read node states after focus attempt
         node_states = None
@@ -362,10 +439,14 @@ def _do_action_impl(
             "node_states": None,
         }
 
+    if _is_not_enabled(node, Atspi.StateType):
+        return _refused(available, _NOT_ENABLED)
+
     # Execute the action
     try:
         action_index = available.index(action_name)
-        node.do_action(action_index)  # type: ignore[union-attr]
+        if not node.do_action(action_index):  # type: ignore[union-attr]
+            return _refused(available, _DECLINED)
         return {
             "success": True,
             "available_actions": available,

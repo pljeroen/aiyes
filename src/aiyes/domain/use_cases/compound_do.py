@@ -7,6 +7,7 @@ from typing import Optional
 
 from aiyes.domain.matching import name_matches, role_matches
 from aiyes.domain.tree import AccessibilityTree, Node, flatten_nodes
+from aiyes.domain.use_cases.action import failed_action_reason
 from aiyes.ports.accessibility_action import AccessibilityActionPort
 from aiyes.ports.accessibility_tree import AccessibilityTreePort
 from aiyes.ports.clock import ClockPort
@@ -16,11 +17,17 @@ from aiyes.ports.tree_store import TreeStorePort
 
 @dataclasses.dataclass(frozen=True)
 class CompoundActionResult:
-    """Result from the action part of compound do."""
+    """Result from the action part of compound do.
+
+    ``reason`` is set when status is "error" and says why the action did not
+    succeed, with the same text the action use case gives for that case; it
+    is None on success.
+    """
 
     status: str
     action: str
     target: str
+    reason: Optional[str] = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -119,11 +126,19 @@ class CompoundDoUseCase:
                     session, node_id, action_name, value, tree_registry
                 )
 
-                compound_action = CompoundActionResult(
-                    status="ok" if action_result.success else "error",
-                    action=action_name,
-                    target=node_id,
-                )
+                if action_result.success:
+                    compound_action = CompoundActionResult(
+                        status="ok", action=action_name, target=node_id
+                    )
+                else:
+                    compound_action = CompoundActionResult(
+                        status="error",
+                        action=action_name,
+                        target=node_id,
+                        reason=failed_action_reason(
+                            action_name, node_id, action_result.failure_reason
+                        ),
+                    )
 
                 # Step 3: Verify (optional, port returns domain type directly)
                 verify_result: Optional[AccessibilityTree] = None

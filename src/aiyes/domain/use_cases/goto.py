@@ -17,10 +17,23 @@ from typing import Optional
 
 from aiyes.domain.matching import name_matches
 from aiyes.domain.tree import flatten_nodes
+from aiyes.domain.types import ACTION_DECLINED, ACTION_NOT_ENABLED, ActionPortResult
 from aiyes.ports.accessibility_action import AccessibilityActionPort
 from aiyes.ports.accessibility_tree import AccessibilityTreePort
 from aiyes.ports.input import InputPort
 from aiyes.ports.storage import SessionRepositoryPort
+
+
+def _focus_failure_reason(node_id: str, result: ActionPortResult) -> str:
+    """Describe why the address bar's "activate" action did not succeed."""
+    if result.failure_reason == ACTION_NOT_ENABLED:
+        return f"Could not focus address bar: node '{node_id}' is not enabled"
+    if result.failure_reason == ACTION_DECLINED:
+        return "Could not focus address bar: 'activate' was declined by the application"
+    return (
+        "Could not focus address bar: 'activate' unavailable "
+        f"(available: {list(result.available_actions)})"
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -54,8 +67,10 @@ class GotoUseCase:
 
         Returns GotoResult(status="ok", url=url) on success, or
         status="error" with a reason for a non-linux backend, an unlocatable
-        address bar, or a failed focus. Raises RuntimeError on a system error
-        (session not found), matching every sibling use case.
+        address bar, or a failed focus (the address bar is not enabled, the
+        application declined "activate", or "activate" is not available).
+        Raises RuntimeError on a system error (session not found), matching
+        every sibling use case.
         """
         session = self._session_repo.load(session_id)
         if session is None:
@@ -97,10 +112,7 @@ class GotoUseCase:
                 status="error",
                 session_id=session_id,
                 action="goto",
-                reason=(
-                    "Could not focus address bar: 'activate' unavailable "
-                    f"(available: {list(action_result.available_actions)})"
-                ),
+                reason=_focus_failure_reason(node.id, action_result),
             )
 
         # Focus confirmed — select existing address text, type URL, submit.

@@ -93,6 +93,10 @@ class AtSpi2ActionAdapter:
 
         When registry is provided, uses persisted path info for stable
         node resolution instead of rebuilding IDs from a fresh tree walk.
+
+        The worker's ``failure_reason`` (why the action did not succeed, when
+        the worker reports one) is copied to the result unchanged; None when
+        absent.
         """
         display = session.display  # type: ignore[union-attr]
         bus_address = session.atspi_bus_address  # type: ignore[union-attr]
@@ -117,6 +121,7 @@ class AtSpi2ActionAdapter:
                         if response.get("node_states")
                         else None
                     ),
+                    failure_reason=response.get("failure_reason"),
                 )
             except (RuntimeError, TimeoutError, OSError, json.JSONDecodeError) as exc:
                 _warn_worker_fallback("do_action", exc)
@@ -180,4 +185,5 @@ class AtSpi2ActionAdapter:
             available_actions=tuple(data.get("available_actions", [])),
             node_value=data.get("node_value"),
             node_states=tuple(data["node_states"]) if data.get("node_states") else None,
+            failure_reason=data.get("failure_reason"),
         )

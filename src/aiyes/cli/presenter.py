@@ -259,14 +259,19 @@ def format_action(
 def format_do(do_result: CompoundDoResult) -> str:
     """Convert compound do result to masked JSON string.
 
-    Applies password masking to found node and verify tree.
+    Applies password masking to found node and verify tree. The action
+    object carries "reason" only when it has one (an action with status
+    "error").
     """
     output: Dict[str, Any] = {}
     if do_result.found is not None:
         found_dict = node_to_dict(do_result.found)
         output["found"] = mask_node_dict(found_dict)
     if do_result.action_result is not None:
-        output["action"] = dataclasses.asdict(do_result.action_result)
+        action_dict = dataclasses.asdict(do_result.action_result)
+        if action_dict.get("reason") is None:
+            action_dict.pop("reason", None)
+        output["action"] = action_dict
     if do_result.verify is not None:
         verify_dict = tree_to_dict(do_result.verify)
         output["verify"] = mask_node_dict(verify_dict)

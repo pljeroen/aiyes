@@ -7,7 +7,7 @@ from typing import Optional, Sequence, Tuple
 
 from aiyes.domain.matching import normalize_whitespace, role_matches
 from aiyes.domain.tree import Node
-from aiyes.domain.types import ActionPortResult
+from aiyes.domain.types import ACTION_DECLINED, ACTION_NOT_ENABLED, ActionPortResult
 from aiyes.ports.accessibility_action import AccessibilityActionPort
 from aiyes.ports.accessibility_tree import AccessibilityTreePort
 from aiyes.ports.clock import ClockPort
@@ -95,16 +95,24 @@ def _refusal_message(
     action: str,
     result: ActionPortResult,
 ) -> str:
-    """Describe a segment action the action port reports did not succeed."""
+    """Describe a segment action the action port reports did not succeed.
+
+    The message names the cause the port reports: a node that is not enabled
+    (the action was not sent) or an action the application declined; for any
+    other failure it says that the action did not succeed.
+    """
     if result.available_actions:
         available = ", ".join(repr(a) for a in result.available_actions)
     else:
         available = "none were reported"
-    return (
-        f"Menu item {segment!r} in path {menu_path!r} could not be activated: "
-        f"action {action!r} on node {node.id!r} did not succeed "
-        f"(available actions: {available})"
-    )
+    prefix = f"Menu item {segment!r} in path {menu_path!r} could not be activated: "
+    if result.failure_reason == ACTION_NOT_ENABLED:
+        cause = f"node {node.id!r} is not enabled, so action {action!r} was not sent"
+    elif result.failure_reason == ACTION_DECLINED:
+        cause = f"action {action!r} on node {node.id!r} was declined by the application"
+    else:
+        cause = f"action {action!r} on node {node.id!r} did not succeed"
+    return f"{prefix}{cause} (available actions: {available})"
 
 
 class MenuUseCase:
@@ -125,11 +133,13 @@ class MenuUseCase:
     it), the traversal stops with an error.
 
     The outcome is only what the action port reports. On Linux the port
-    reports success once the action has been sent to the node; it does not
-    report whether the application carried it out. An application that
-    receives the action but declines it (for example a disabled menu item)
-    is therefore treated as activated: the traversal goes on with the next
-    segment, and a declined last segment still yields status "ok".
+    refuses a node that is not enabled without sending the action, and
+    reports an action the application declines; either stops the traversal
+    with an error that names the cause. The effect of an activation is not
+    checked: an enabled node that accepts the action but on which the
+    application does not act is treated as activated, so the traversal goes
+    on with the next segment, and on the last segment the result is status
+    "ok".
     """
 
     def __init__(
@@ -152,9 +162,10 @@ class MenuUseCase:
         Returns the last segment's node. Raises RuntimeError when a segment is
         not found in its scope (the whole tree for the first segment, the
         previous segment's node for every later one) or when the action port
-        reports that a segment's action did not succeed. An action the port
-        reports as successful is not checked further, so an application that
-        declines it is not detected (see the class docstring).
+        reports that a segment's action did not succeed, which includes a node
+        that is not enabled and an action the application declines. An enabled
+        node that accepts the action without carrying it out is still treated
+        as activated (see the class docstring).
         """
         if not menu_path or not menu_path.strip():
             raise ValueError(

@@ -13,6 +13,10 @@ from typing import TYPE_CHECKING, Optional, Tuple
 if TYPE_CHECKING:
     pass
 
+# Values of ActionPortResult.failure_reason.
+ACTION_NOT_ENABLED = "not_enabled"
+ACTION_DECLINED = "declined"
+
 
 @dataclasses.dataclass(frozen=True)
 class BusStartResult:
@@ -25,13 +29,21 @@ class BusStartResult:
 
 @dataclasses.dataclass(frozen=True)
 class ActionPortResult:
-    """Result of executing an accessibility action via the port."""
+    """Result of executing an accessibility action via the port.
+
+    ``failure_reason`` says why an action did not succeed, when the adapter
+    reports one: ``ACTION_NOT_ENABLED`` (the node is not enabled, so the
+    action was not sent) or ``ACTION_DECLINED`` (the application was asked
+    and declined). It is None on success and whenever the adapter reports no
+    reason.
+    """
 
     success: bool
     available_actions: Tuple[str, ...]
     node_value: Optional[str] = None
     node_states: Optional[Tuple[str, ...]] = None
     action_method: Optional[str] = None
+    failure_reason: Optional[str] = None
 
     def __post_init__(self) -> None:
         """Ensure tuple fields are truly immutable."""
