@@ -522,7 +522,7 @@ All successful commands return JSON to stdout. Examples:
   "status": "error",
   "action": "set_text",
   "target": "n_002",
-  "reason": "Action not available",
+  "reason": "Action 'set_text' not available on node 'n_002'",
   "available_actions": ["click", "activate"]
 }
 ```
@@ -629,7 +629,7 @@ Android support is intended for adb-connected emulators and trusted devices. It 
 - **Use `detect-dialog` for popups.** After an action that might trigger a dialog, check before continuing.
 - **Prefer `--screenshot-base64` for inline analysis.** When you need to see the screenshot in your response, use base64 encoding to avoid filesystem round-trips.
 - **Use `--tree-depth` for large apps.** Limit depth to focus on the relevant part of the tree.
-- **Use `--no-prune` when debugging.** If expected nodes are missing, pruning might be hiding them.
+- **Use `inspect --no-prune` when debugging.** If expected nodes are missing from `inspect` or `find` output, pruning might be hiding them; `inspect --no-prune` shows the raw tree.
 
 ### App requirements
 
