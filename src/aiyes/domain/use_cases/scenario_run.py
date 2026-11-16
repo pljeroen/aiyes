@@ -340,22 +340,16 @@ def _action_failure_message(step_id: str, output: Mapping[str, Any]) -> str:
             step, observed, action, offered, expects_refusal
         )
     if expects_refusal:
-        focus_check = (
-            ""
-            if action == "focus"
-            else ' On Linux, "action": "focus" with "expect": "refused" passes '
-            "on a node that is not enabled even when it offers no actions."
-        )
         return (
             f"{step} expected a refusal, but aiyes could not confirm the target "
             f"was there: {observed} (no actions and no refusal cause were "
             "reported, which is also what a missing target looks like). If the "
-            "target is there, a refusal of this action cannot be observed on it."
-            f"{focus_check} On Android a refusal cannot be observed (the Android "
-            "backend reports no refusal cause). If the target may not be there "
-            "yet, wait for it before this step; if it may be absent, set "
-            '"expect": "any" (best effort; the step then no longer checks a '
-            "refusal)."
+            "target is there, this is not a refusal: a refusal counts only when "
+            "the node is not enabled or the application declines the action. On "
+            "Android a refusal cannot be observed (the Android backend reports no "
+            "refusal cause). If the target may not be there yet, wait for it "
+            'before this step; if it may be absent, set "expect": "any" (best '
+            "effort; the step then no longer checks a refusal)."
         )
     return (
         f"{step} failed: {observed}. aiyes could not confirm the target was there: "
@@ -363,9 +357,7 @@ def _action_failure_message(step_id: str, output: Mapping[str, Any]) -> str:
         "missing target looks like. If the target may not be there yet, wait for "
         'it before this step; if it may be absent, set "expect": "any" on that '
         "step (best effort). If it is there, it offers no actions, so the action "
-        "cannot be sent to it: check that it is the node you meant and that it is "
-        "enabled at this point (some toolkits list no actions for a widget that "
-        "is not enabled)."
+        "cannot be sent to it: check that it is the node you meant."
     )
 
 

@@ -327,11 +327,12 @@ class ScenarioUseCaseExecutor:
         it passes only when the action reports an error whose reason is a
         refusal cause (a disabled node, or an action the application
         declined); it fails with action_not_refused when the action went
-        through and with action_failed otherwise, including an action the
-        target does not offer. With "any" (best effort) it passes whatever the
-        action reports, including a source step that gave no node id (while
-        the scenario has an active session) and a node id the stored tree does
-        not contain, and fails with action_failed only on an unreadable result.
+        through and with action_failed otherwise, including an action an
+        enabled target does not offer. With "any" (best effort) it passes
+        whatever the action reports, including a source step that gave no node
+        id (while the scenario has an active session) and a node id the stored
+        tree does not contain, and fails with action_failed only on an
+        unreadable result.
 
         A failed step keeps every key of the action output and adds
         "failure_code"; a step whose "expect" is "refused" or "any" also

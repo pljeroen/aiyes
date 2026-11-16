@@ -278,13 +278,17 @@ def _do_action_impl(
     example ``set_text_contents`` on a read-only GTK3 text field, which
     leaves the text unchanged) is reported as success. Before that call, a
     node that is not enabled (see ``_is_not_enabled``) is refused without
-    asking the application to act. A refused node and a call that returned
-    a falsy value add ``failure_reason`` to the result: ``"not_enabled"``
-    for a refused node, ``"declined"`` for the falsy value.
-    Every other result (node not found, action not offered, a call that
-    raised) carries no ``failure_reason``. For a listed action the offered
-    actions are checked first, so a node that does not offer the action is
-    reported as before whatever its state.
+    asking the application to act, whether or not it offers the requested
+    action: a node that offers only other actions, or none, is refused the
+    same way. For an action other than ``focus`` or ``set_text`` with a
+    value, that refusal lists the node's actions, or none when the action
+    listing could not be read. A refused node and a call that returned a
+    falsy value add ``failure_reason`` to the result: ``"not_enabled"`` for
+    a refused node, ``"declined"`` for the falsy value.
+    Every other result (node not found, an action that an enabled node does
+    not offer, a call that raised) carries no ``failure_reason``. A state set
+    that cannot be read counts as enabled, so after such a read an action the
+    node does not offer is also reported without a ``failure_reason``.
     """
     _setup_env(display, bus_address)
 
@@ -421,6 +425,7 @@ def _do_action_impl(
 
     # Get available actions
     available: List[str] = []
+    listing_failed = False
     try:
         n_actions = node.get_n_actions()  # type: ignore[union-attr]
         for i in range(n_actions):
@@ -429,6 +434,15 @@ def _do_action_impl(
                 available.append(name)
     except Exception as exc:
         _warn("action.get_actions", exc)
+        listing_failed = True
+
+    # A node that is not enabled is refused whether or not it offers the
+    # requested action: some toolkits list no actions, or only other actions,
+    # for a widget that is not enabled. The state set is read once here. When
+    # the listing failed, the refusal reports no actions rather than the names
+    # read before the failure.
+    if _is_not_enabled(node, Atspi.StateType):
+        return _refused([] if listing_failed else available, _NOT_ENABLED)
 
     # Check if requested action is available
     if action_name not in available:
@@ -438,9 +452,6 @@ def _do_action_impl(
             "node_value": None,
             "node_states": None,
         }
-
-    if _is_not_enabled(node, Atspi.StateType):
-        return _refused(available, _NOT_ENABLED)
 
     # Execute the action
     try:

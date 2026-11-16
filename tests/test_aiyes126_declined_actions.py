@@ -620,15 +620,12 @@ class TestWorkerChecksTheEnabledState:
         assert response.get("failure_reason") is None
         assert _enabled_check_warnings(capsys.readouterr().err) == 0
 
-    def test_action_the_node_does_not_offer_is_reported_as_before(self) -> None:
+    def test_action_the_node_does_not_offer_is_refused_without_a_request(
+        self,
+    ) -> None:
         node = _FakeAccessible(actions=["click"], states=_FakeStateSet())
 
-        assert _without_null_reason(_run_worker(node, "Press")) == {
-            "success": False,
-            "available_actions": ["click"],
-            "node_value": None,
-            "node_states": None,
-        }
+        assert _run_worker(node, "Press") == _not_enabled(["click"])
         assert node.act_calls == []
 
 

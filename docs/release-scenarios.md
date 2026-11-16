@@ -144,27 +144,29 @@ session, or an invalid step.
 
 `"refused"` counts an error as a refusal only when its cause is that the node is
 not enabled or that the application declined the action, as the reason says.
-An action the target does not offer is not a refusal, because the application
-was never asked: the step fails with `action_failed`, and the message names the
-actions the target offers. An error without a refusal cause on a target that
-lists no actions also fails with `action_failed`, with a message saying that
-aiyes could not confirm the target was there, because a target that is missing
-when the action runs gives the same result as a target that offers no actions.
-If the target may appear late, wait for it before the step; if it may be
-absent, `"any"` makes the step best effort, so it no longer checks a refusal.
-When the target is there but offers no actions (some toolkits, for example Qt,
-list no actions for a widget that is not enabled), a refusal of that action
-cannot be observed on it, and a `find` before the step does not change that.
+On Linux, a node that is not enabled is reported as not enabled whatever action
+the step names, also when it does not offer that action or offers no actions
+(some toolkits, for example Qt, list no actions for a widget that is not
+enabled), so `"refused"` passes on it. The check then does not show that the
+target offers the action it names: a refused check that names an action the
+target never offers passes while the node is not enabled, and fails with
+`action_failed` as an action the target does not offer once the node is
+enabled.
+
+An action that an enabled target does not offer is not a refusal, because the
+application was never asked: the step fails with `action_failed`, and the
+message names the actions the target offers. An error without a refusal cause
+on a target that lists no actions also fails with `action_failed`, with a
+message saying that aiyes could not confirm the target was there, because a
+target that is missing when the action runs gives the same result as an enabled
+target that offers no actions. If the target may appear late, wait for it
+before the step; if it may be absent, `"any"` makes the step best effort, so it
+no longer checks a refusal.
 
 On Linux, `"action": "focus"` with `"expect": "refused"` passes on a node that is
-not enabled even when it offers no actions, because aiyes checks the enabled
-state before focusing. It also passes when the application declines focus; on
-an enabled node it moves the keyboard focus and fails with
-`action_not_refused`. To write a refused check on Linux, name an action the
-target offers when it is enabled, on a toolkit that keeps listing the actions
-of a disabled widget (for example GTK): the disabled node then reports that it
-is not enabled. On a toolkit that hides those actions, use `focus`, which
-reports a node that is not enabled also when it offers no actions.
+not enabled, like any other action, and also when the application declines
+focus; on an enabled node it moves the keyboard focus and fails with
+`action_not_refused`.
 
 The `"expect"` value is validated when the scenario file loads, in dry-run,
 real runs and `scenario preflight`, before any application starts. A value other
@@ -175,11 +177,11 @@ and prints the validation result; over MCP the result carries `failure_code`
 `validation_error` with the same issue.
 
 On Android, `"refused"` never passes, because the Android backend reports no
-refusal cause. For `click`, `focus`, `long_click` and `scroll`, a widget that is
-found is tapped and reported `"status": "ok"`, also one that is not enabled, so
-on Android a refused `click` on a disabled widget fails with
-`action_not_refused`; any other error (a widget that is not found, an action it
-does not offer) fails with `action_failed`.
+refusal cause, so a refusal cannot be observed there. For `click`, `focus`,
+`long_click` and `scroll`, a widget that is found is tapped and reported
+`"status": "ok"`, also one that is not enabled, so on Android a refused `click`
+on a disabled widget fails with `action_not_refused`; any other error (a widget
+that is not found, an action it does not offer) fails with `action_failed`.
 
 This policy is scoped to scenario-step classification only. The standalone
 `action` and `do` commands still exit 0 and report `"status": "error"` in their

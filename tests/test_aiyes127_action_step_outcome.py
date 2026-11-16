@@ -1576,11 +1576,10 @@ class TestRunMessage:
                     _NOT_AVAILABLE_REASON,
                     _TARGET_NOT_CONFIRMED,
                     _NOT_OBSERVABLE,
-                    _FOCUS_FIX,
                     _WAIT_FIX,
                     _ANY_FIX,
                 ],
-                [_REQUIRED_FIND],
+                [_FOCUS_FIX, _REQUIRED_FIND],
             ),
             (
                 "result_without_status",
