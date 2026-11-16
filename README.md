@@ -145,10 +145,12 @@ Run `aieyes --help` or `aieyes <command> --help` for full usage.
 
 `goto <url>` and `reload` are **linux/AT-SPI + xdotool browser-session
 primitives** (not available on the Android backend). `goto` is address-bar
-automation — it locates the browser address bar (an `entry` whose accessible
-name contains "address"), focuses it, selects all, types the URL and presses
-Return; it is verified on Firefox and works for any AT-SPI-exposed address bar,
-but is not a hard cross-browser guarantee. If the address bar cannot be located
+automation — it locates the browser address bar (an `entry`, or a `combo box`
+in a toolbar, whose accessible name contains "address"), focuses it, selects
+all, types the URL and presses Return. It never acts on a control inside the
+web page, such as a form field whose name contains "address". `goto` is
+verified on Firefox 159 with an English user interface; other browsers and
+other interface languages are not verified. If the address bar cannot be located
 or focused, `goto` reports a structured error and sends no keystrokes rather
 than typing into the wrong control. `reload` performs a cache-bypassing hard
 reload (Ctrl+Shift+R).

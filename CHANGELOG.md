@@ -33,6 +33,12 @@
   - The `"expect"` value is checked when the scenario file loads, before any application starts: a value other than `"ok"`, `"refused"` or `"any"` is rejected with `action_expect_invalid`, and `"expect"` on a step that is not an `action` step is rejected with `expect_not_supported` (`failure_code` `validation_error`; the CLI exits with code 2).
   - Cleanup `action` steps are classified the same way: a failed one is recorded as failed, but it does not change the run result.
   - The standalone `action`, `do`, `goto` and `menu` commands and MCP tools are unchanged: `action`, `do` and `goto` still exit with code 0 and report `"status": "error"` when an action fails.
+- **`goto` finds the address bar of current Firefox and no longer types into the web page**: on Linux, `goto` looked for the address bar only as an `entry` whose accessible name contains "address". It did not find the address bar of current Firefox, which exposes it as a combo box, and stopped with "Address bar not found". On a page with a field whose accessible name contains "address" (for example "Email address"), `goto` typed the URL into that page field, pressed Return and reported `"status": "ok"`. `goto` now also accepts a combo box inside a toolbar as the address bar, and it acts only on the browser's address bar, never on a control inside the web page. It is verified on Firefox 159 with an English user interface; other browsers and other interface languages are not verified.
+- **Visible changes for callers of `goto`** on Linux (CLI command and MCP tool):
+  - `goto` now navigates Firefox 159, where it stopped with "Address bar not found".
+  - On a page with a field whose accessible name contains "address", `goto` navigates through the address bar instead of typing the URL into the field. When no address bar is found, it reports `"status": "error"` and types nothing, also when the page has such a field.
+  - The reason reported when no address bar is found changes from "Address bar not found (role=entry, name~address)" to "Address bar not found (role=entry, or combo box in a tool bar; name~address; outside page content)".
+  - The result shape and the exit codes are unchanged.
 
 ## [0.2.0] - 2026-05-08
 
