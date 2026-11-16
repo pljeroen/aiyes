@@ -1051,17 +1051,18 @@ class ScenarioUseCaseExecutor:
         if failure_class == "no_scrollable" and progress == "unchanged":
             # AIYES-106: read-only over the already-computed failure evidence —
             # attach app-side accessibility-exposure guidance and emit LE-01.
-            output["guidance"] = _no_scrollable_exposure_guidance(
+            guidance = _no_scrollable_exposure_guidance(
                 failure_class=failure_class,
                 progress=progress,
                 attempts=attempts,
                 direction=direction,
                 viewport=viewport,
             )
+            output["guidance"] = guidance
             self._emit_classification(
                 step_id,
                 "no_scrollable",
-                output["guidance"]["summary"],
+                guidance["summary"],
                 contract_id="AIYES-106",
             )
         self._outputs[step_id] = output

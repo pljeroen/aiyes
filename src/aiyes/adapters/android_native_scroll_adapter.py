@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import locale
 import os
 import shlex
 import subprocess
@@ -23,10 +24,30 @@ _DEFAULT_HELPER_COMMAND = (
 )
 
 
-def _summary(value: Optional[str]) -> str:
+def _output_text(data: bytes) -> str:
+    """Decode raw helper output into the text a completed helper run yields.
+
+    A helper that finishes is read in text mode: its output is decoded with the
+    default text encoding (the locale encoding, or UTF-8 in UTF-8 mode) and
+    CR LF and lone CR become LF. A helper that runs past its time limit leaves
+    its output behind as raw bytes; this gives the same text for the same
+    bytes, except that bytes which do not decode (for example a character cut
+    off by the time limit) are replaced instead of raising.
+    """
+    text = data.decode(locale.getpreferredencoding(False), "replace")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _summary(value: str | bytes | None) -> str:
+    """Return helper output as stripped text of at most ``_SUMMARY_LIMIT`` characters.
+
+    Text is used as given, raw bytes are decoded first (see ``_output_text``),
+    and missing output gives an empty string.
+    """
     if not value:
         return ""
-    return value.strip()[:_SUMMARY_LIMIT]
+    text = _output_text(value) if isinstance(value, bytes) else value
+    return text.strip()[:_SUMMARY_LIMIT]
 
 
 class AndroidNativeScrollAdapter:

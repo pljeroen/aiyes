@@ -13,10 +13,13 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from aiyes import __version__ as AIYES_VERSION
 from aiyes.domain import evidence_profile
+
+if TYPE_CHECKING:
+    from aiyes.ports.diagnostic_event import DiagnosticEventPort
 
 
 SMOKE_ENABLE_ENV = "AIYES_RUN_REAL_SMOKE"
@@ -585,7 +588,7 @@ def _run_socialzzz_android_harness(
 def _finalize_evidence(
     evidence: Dict[str, Any],
     profile: str,
-    diagnostic_log: object,
+    diagnostic_log: Optional[DiagnosticEventPort],
 ) -> Dict[str, Any]:
     """Shape step records by profile and emit one LE-02 selection event.
 
@@ -627,7 +630,7 @@ def run_smoke_harness(
     environ: Optional[Mapping[str, str]] = None,
     now: Clock = _utc_now,
     profile: str = "compact",
-    diagnostic_log: object = None,
+    diagnostic_log: Optional[DiagnosticEventPort] = None,
 ) -> Dict[str, Any]:
     """Run an opt-in smoke target and return a JSON-serializable evidence dict.
 

@@ -531,7 +531,12 @@ def create_mcp_server(deps: ServerDependencies) -> "McpServerWrapper":
                     params.name, params.arguments or {}
                 )
 
-            mcp_server = Server(
+            # The type checker reads the one installed SDK, and each supported
+            # SDK describes only its own constructor shape. Where the SDK with
+            # decorator registration is installed, these keyword arguments are
+            # unknown to it, so that one error code is suppressed on this line
+            # only; the decorator branch above is still checked there.
+            mcp_server = Server(  # type: ignore[call-arg]
                 "aieyes",
                 on_list_tools=_list_tools,
                 on_call_tool=_call_tool,
