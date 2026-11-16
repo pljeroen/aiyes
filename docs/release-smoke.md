@@ -127,7 +127,7 @@ skipped unless `--run-real` or `AIYES_RUN_REAL_SMOKE=1` is set.
 ```bash
 AIYES_SOCIALZZZ_DEVICE_SERIAL=emulator-5554 \
 AIYES_SOCIALZZZ_APP_PACKAGE=com.socialzzz.socialzzz \
-AIYES_SOCIALZZZ_SCENARIO_DIR=/home/jeroen/dev/socialzzz/test/scenarios \
+AIYES_SOCIALZZZ_SCENARIO_DIR=/path/to/socialzzz/test/scenarios \
 python -m aiyes.smoke_harness \
   --target socialzzz-android \
   --run-real \
