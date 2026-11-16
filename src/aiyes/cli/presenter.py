@@ -187,11 +187,14 @@ def format_find_nodes(result: "FindResult | List[FoundNode]") -> str:
     # an envelope carrying the diagnostic.
     if scope_requested or role_drift:
         envelope: Dict[str, Any] = {"nodes": masked}
-        if scope_requested and isinstance(result, FindResult):
-            envelope["scope_matched"] = result.scope_matched
+        if scope_requested:
+            # Read like scope_requested above: any result that requests scope
+            # supplies these fields, whatever list type carries it, and a
+            # missing one raises AttributeError naming it.
+            envelope["scope_matched"] = getattr(result, "scope_matched")
             envelope["matched_ancestors"] = [
                 {"id": a.id, "role": a.role, "name": a.name}
-                for a in result.matched_ancestors
+                for a in getattr(result, "matched_ancestors")
             ]
         if role_drift:
             envelope["role_drift"] = [
