@@ -203,10 +203,62 @@ class TestCreateMcpServer:
 
 
 # ===================================================================
+# Which MCP SDK registration shape is installed
+# ===================================================================
+
+
+def _installed_mcp_version() -> str:
+    """Return the installed mcp version as the package metadata reports it."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("mcp")
+    except PackageNotFoundError:
+        return "not installed"
+
+
+def _sdk_looks_up_handlers_by_method() -> bool:
+    """Tell whether the installed MCP SDK server looks up handlers by method name.
+
+    MCP SDK 2.x servers offer get_request_handler(method). MCP SDK 1.x servers
+    have no such method; they keep a request_handlers mapping keyed by request
+    type. This one answer selects which family of transport checks runs: the
+    SDK 2.x checks when it is true, the SDK 1.x checks when it is false, so the
+    two families are never skipped together.
+    """
+    try:
+        from mcp.server import Server
+    except ImportError:
+        return False
+    return hasattr(Server, "get_request_handler")
+
+
+_INSTALLED_MCP_VERSION = _installed_mcp_version()
+_SDK_LOOKS_UP_HANDLERS_BY_METHOD = _sdk_looks_up_handlers_by_method()
+
+requires_mcp_sdk2_registration = pytest.mark.skipif(
+    not _SDK_LOOKS_UP_HANDLERS_BY_METHOD,
+    reason=(
+        "this check needs MCP SDK 2.x (handlers looked up by method name); "
+        f"the installed mcp is {_INSTALLED_MCP_VERSION}"
+    ),
+)
+
+requires_mcp_sdk1_registration = pytest.mark.skipif(
+    _SDK_LOOKS_UP_HANDLERS_BY_METHOD,
+    reason=(
+        "this check needs MCP SDK 1.x (handlers registered by request type); "
+        f"the installed mcp is {_INSTALLED_MCP_VERSION}"
+    ),
+)
+
+
+# ===================================================================
 # MCP SDK 2.0 transport registration
 # ===================================================================
 
 
+@requires_mcp_sdk2_registration
 class TestMcpSdk2TransportHandlers:
     """The underlying MCP SDK server must expose usable transport handlers."""
 
@@ -254,6 +306,91 @@ class TestMcpSdk2TransportHandlers:
 
         assert isinstance(response, CallToolResult)
         assert response.isError is False
+        doctor_uc.execute.assert_called_once_with()
+
+
+# ===================================================================
+# MCP SDK 1.x transport registration
+# ===================================================================
+
+
+def _sdk1_registered_handler(mcp_server: Any, request_type: type) -> Any:
+    """Return the handler an MCP SDK 1.x server holds for request_type.
+
+    An MCP SDK 1.x server dispatches a request by looking up the request's type
+    in its request_handlers mapping; this does the same lookup. When the server
+    has no such mapping (an SDK that offers neither the SDK 2.x lookup by method
+    name nor the SDK 1.x registry), the check fails here, naming the installed
+    mcp, instead of being skipped.
+    """
+    handlers = getattr(mcp_server, "request_handlers", None)
+    assert isinstance(handlers, dict), (
+        f"the installed mcp {_INSTALLED_MCP_VERSION} offers neither the MCP SDK 2.x "
+        "handler lookup by method name nor the MCP SDK 1.x request_handlers "
+        "registry, so neither family of transport checks can check its registration"
+    )
+    handler = handlers.get(request_type)
+    assert handler is not None, (
+        f"the MCP SDK 1.x server has no handler registered for {request_type.__name__}"
+    )
+    return handler
+
+
+@requires_mcp_sdk1_registration
+class TestMcpSdk1TransportHandlers:
+    """On MCP SDK 1.x the SDK server's registered handlers serve tools/list and tools/call."""
+
+    def test_sdk1_list_tools_handler_returns_wrapper_tools(self) -> None:
+        """SDK 1.x registers a tools/list handler that returns the wrapper list_tools output."""
+        from mcp.types import ListToolsRequest, ListToolsResult, ServerResult
+
+        deps = _make_mock_deps()
+        server = create_mcp_server(deps)
+
+        transport_handler = _sdk1_registered_handler(
+            server.mcp_server, ListToolsRequest
+        )
+
+        response = asyncio.run(transport_handler(ListToolsRequest(method="tools/list")))
+
+        assert isinstance(response, ServerResult)
+        assert isinstance(response.root, ListToolsResult)
+        assert response.root.tools == asyncio.run(server.list_tools())
+
+    def test_sdk1_call_tool_handler_dispatches_known_tool(self) -> None:
+        """SDK 1.x routes tools/call through the registered handler to the wrapper dispatch."""
+        from mcp.types import (
+            CallToolRequest,
+            CallToolRequestParams,
+            CallToolResult,
+            ServerResult,
+        )
+
+        doctor_uc = MagicMock()
+        doctor_uc.execute.return_value = []
+        clock = MagicMock()
+        clock.now.return_value = 1000.0
+        deps = _make_mock_deps(
+            doctor_uc=doctor_uc,
+            clock=clock,
+            operation_log=MagicMock(),
+        )
+        server = create_mcp_server(deps)
+
+        transport_handler = _sdk1_registered_handler(server.mcp_server, CallToolRequest)
+
+        response = asyncio.run(
+            transport_handler(
+                CallToolRequest(
+                    method="tools/call",
+                    params=CallToolRequestParams(name="doctor", arguments={}),
+                )
+            )
+        )
+
+        assert isinstance(response, ServerResult)
+        assert isinstance(response.root, CallToolResult)
+        assert response.root.isError is False
         doctor_uc.execute.assert_called_once_with()
 
 
