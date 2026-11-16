@@ -176,11 +176,14 @@ class _RecordingInput:
 
 # ═══════════════════════════════════════════════════════════════════════
 # Tree factory — a browser window whose address bar is a role=entry node
-# whose accessible name contains "address" (the Firefox AT-SPI convention),
-# surrounded by DECOYS that must NOT be selected:
+# whose accessible name contains "address" (one of the address-bar shapes
+# goto accepts; Firefox 159 exposes its address bar as a combo box inside a
+# tool bar, a shape other goto tests cover), surrounded by DECOYS that must
+# NOT be selected:
 #   * a role=entry named "Find in page" (right role, wrong name)
 #   * a role=label named "Address:"     (right name, wrong role)
-# so the (role=="entry" AND name~"address") filter is genuinely exercised.
+# so the entry branch of the address-bar rule (role=="entry" AND
+# name~"address") is genuinely exercised.
 # ═══════════════════════════════════════════════════════════════════════
 
 

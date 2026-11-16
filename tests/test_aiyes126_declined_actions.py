@@ -14,9 +14,10 @@ These tests pin the resulting behaviour end to end:
   cases turn it into a message that says what happened;
 * CLI and MCP outcomes follow the documented error handling (action, do, goto:
   exit 0 with ``"status": "error"``; menu: exit 1 with the message on stderr);
-* responses outside these cases are unchanged, a scenario action step whose
-  action reports an error fails, and the documentation describes the new
-  outcomes.
+* do now gives every action error a reason on every platform, the same text
+  action gives for that case (an action that is not available included); a
+  scenario action step whose action reports an error fails; and the
+  documentation describes the new outcomes.
 
 All accessibles, state sets and AT-SPI bindings are in-memory doubles, so no
 display, accessibility bus or toolkit is needed.
