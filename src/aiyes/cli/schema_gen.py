@@ -121,6 +121,8 @@ def click_to_json_schema(command: click.Command) -> Dict[str, Any]:
         is_required = False
 
         if isinstance(param, click.Option):
+            # The option's help is its description for every kind of option:
+            # the branches below add their keys to prop and never replace it.
             if param.help:
                 prop["description"] = param.help
             if param.is_flag:
@@ -133,7 +135,7 @@ def click_to_json_schema(command: click.Command) -> Dict[str, Any]:
                     prop["default"] = False
             elif getattr(param, "multiple", False):
                 item_schema = _click_type_to_schema(param.type, param)
-                prop = {"type": "array", "items": item_schema}
+                prop.update({"type": "array", "items": item_schema})
                 if param.required:
                     is_required = True
                 else:
@@ -148,7 +150,7 @@ def click_to_json_schema(command: click.Command) -> Dict[str, Any]:
                     else:
                         prop["default"] = []
             else:
-                prop = _click_type_to_schema(param.type, param)
+                prop.update(_click_type_to_schema(param.type, param))
                 if param.required:
                     is_required = True
                 elif param.default is None:

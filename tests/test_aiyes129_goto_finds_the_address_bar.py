@@ -867,6 +867,7 @@ class TestGotoCommandAndTool:
         assert [ports.events for ports in recordings] == [_navigated_through(_BAR)] * 2
 
     def test_goto_description_and_parameters_are_unchanged(self) -> None:
+        """Pins goto's command description and generated parameters, option descriptions included."""
         runner = make_cli_runner()
         with patch("aiyes.cli.main.operation_log_adapter", MagicMock()):
             result = runner.invoke(cli, ["help-json"])
@@ -884,7 +885,11 @@ class TestGotoCommandAndTool:
         assert entries[0]["parameters"] == {
             "type": "object",
             "properties": {
-                "session_id": {"type": ["string", "null"], "default": None},
+                "session_id": {
+                    "type": ["string", "null"],
+                    "default": None,
+                    "description": "Session ID.",
+                },
                 "url": {"type": "string"},
             },
             "required": ["url"],

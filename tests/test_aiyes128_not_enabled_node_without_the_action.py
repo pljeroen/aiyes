@@ -1063,7 +1063,7 @@ _STALE_CHANGELOG_SENTENCE = (
 )
 
 # Top-level entries under "### Fixed" in the unreleased part of the changelog.
-_UNRELEASED_FIXED_ENTRIES = 10
+_UNRELEASED_FIXED_ENTRIES = 12
 
 
 class TestDocumentationOfTheOrder:

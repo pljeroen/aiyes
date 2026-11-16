@@ -39,6 +39,11 @@
   - On a page with a field whose accessible name contains "address", `goto` navigates through the address bar instead of typing the URL into the field. When no address bar is found, it reports `"status": "error"` and types nothing, also when the page has such a field.
   - The reason reported when no address bar is found changes from "Address bar not found (role=entry, name~address)" to "Address bar not found (role=entry, or combo box in a tool bar; name~address; outside page content)".
   - The result shape and the exit codes are unchanged.
+- **`help-json` and the MCP tool definitions show the help text of every option**: the parameter schemas in `help-json` and in the MCP tool definitions carried an option's help text as its `description` only for flags. Value options, choice options and repeatable options lost their help text, so, for example, `find --within-name` appeared without any description. Every option that has help text now carries it as the `description` of its parameter, except where the scenario tools describe a parameter with their own text, which they keep.
+- **Visible changes for callers of `help-json` and for MCP clients** (the `help-json` command, the `help_json` MCP tool and the MCP tool definitions):
+  - Option parameters that had no description gain a `"description"` string with the option's help text. Types, defaults, allowed values, required parameters, command descriptions and command behaviour are unchanged.
+  - Positional arguments do not gain a description. The parameter descriptions of `scenario_run` and `scenario_preflight` are unchanged.
+  - The MCP server builds its tool definitions when it starts: restart or reconnect a running server to see the descriptions.
 
 ## [0.2.0] - 2026-05-08
 
