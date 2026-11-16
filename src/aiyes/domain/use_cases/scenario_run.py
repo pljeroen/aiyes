@@ -356,8 +356,9 @@ def _action_failure_message(step_id: str, output: Mapping[str, Any]) -> str:
         "no actions and no refusal cause were reported, which is also what a "
         "missing target looks like. If the target may not be there yet, wait for "
         'it before this step; if it may be absent, set "expect": "any" on that '
-        "step (best effort). If it is there, it offers no actions, so the action "
-        "cannot be sent to it: check that it is the node you meant."
+        "step (best effort). If it is there, it reported no actions and no refusal "
+        "cause, so aiyes cannot tell why the action failed: check that it is the "
+        "node you meant."
     )
 
 
