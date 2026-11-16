@@ -16,8 +16,9 @@ These tests pin the resulting behaviour end to end:
   exit 0 with ``"status": "error"``; menu: exit 1 with the message on stderr);
 * do now gives every action error a reason on every platform, the same text
   action gives for that case (an action that is not available included); a
-  scenario action step whose action reports an error fails; and the
-  documentation describes the new outcomes.
+  scenario action step with the default ``"expect"`` value (``"ok"``) fails
+  when its action reports an error; and the documentation describes the new
+  outcomes.
 
 All accessibles, state sets and AT-SPI bindings are in-memory doubles, so no
 display, accessibility bus or toolkit is needed.
