@@ -246,13 +246,8 @@ class MarionetteAdapter:
         return transport, False
 
     def _evict(self, session: Any) -> None:
-        """Drop the cached transport for the session's port and close its socket.
-
-        A session without a marionette port has no cached transport to drop.
-        """
-        port = getattr(session, "marionette_port", None)
-        if port is None:
-            return
+        """Drop the cached transport for the session's port and close its socket."""
+        port: Any = getattr(session, "marionette_port", None)
         transport = self._conns.pop(port, None)
         if transport is None:
             return
