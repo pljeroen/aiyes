@@ -467,8 +467,8 @@ class TestRoleAliases:
 
     @given(alias=st.sampled_from(list(ROLE_ALIAS_TABLE.keys())))
     @settings(max_examples=50)
-    def test_alias_output_is_canonical_property(self, alias: str) -> None:
-        """R-OUTPUT-03 PBT: Output is always a canonical AT-SPI2 role name."""
+    def test_resolved_role_resolves_to_itself_property(self, alias: str) -> None:
+        """PBT: resolving any alias-table key gives a name that resolves to itself."""
         result = resolve_role(alias)
         # Canonical names are themselves in the table as identity mappings
         # or they are values in the alias table

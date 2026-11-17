@@ -207,8 +207,8 @@ flags are independent options, not a selector language, and apply to `find`
 only.
 
 When an exact-role `find` with a name pattern matches zero nodes, yet the same
-name matches under a *different* role (for example you asked for `View` but the
-tappable is exposed as a `push_button`), the result carries an additive
+name matches under a *different* role (for example, on Android, you asked for
+`View` but the tappable is exposed as a `Button`), the result carries an additive
 `role_drift` field — `[{"id", "role", "name"}, ...]`, the same shape as
 `matched_ancestors` — naming every node whose name matches under another role, in
 document order (scoped finds report only candidates inside the requested scope).

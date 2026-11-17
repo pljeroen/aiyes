@@ -48,7 +48,7 @@ The accessibility tree is a structured representation of the GUI. Every visible 
 | Property | Description |
 |----------|-------------|
 | `id` | Stable node identifier (session-scoped, path-based) |
-| `role` | What the element is: `push_button`, `text`, `menu_item`, etc. |
+| `role` | What the element is, in the text the backend reports: on Linux the AT-SPI role name, for example `button`, `entry`, `menu item` or `combo box` (as recorded with Firefox 159); on Android the widget class without its `android.widget.`, `android.view.` or `android.webkit.` prefix, for example `Button` or `EditText`. Commands that take a role also match it written with underscores instead of spaces, or as an alias (see [Role aliases](#role-aliases)) |
 | `name` | Human-readable label (e.g., "Submit", "File", "Username") |
 | `bounds` | Position and size as `[x, y, width, height]` |
 | `states` | Current states: `focused`, `checked`, `enabled`, `selected`, etc. |
@@ -488,7 +488,7 @@ All successful commands return JSON to stdout. Examples:
         "children": [
           {
             "id": "n_002",
-            "role": "push_button",
+            "role": "button",
             "name": "Submit",
             "bounds": [100, 200, 80, 30],
             "states": ["enabled", "focusable", "showing"],
@@ -508,7 +508,7 @@ All successful commands return JSON to stdout. Examples:
 [
   {
     "id": "n_002",
-    "role": "push_button",
+    "role": "button",
     "name": "Submit",
     "bounds": [100, 200, 80, 30],
     "states": ["enabled", "focusable", "showing"],
@@ -516,6 +516,8 @@ All successful commands return JSON to stdout. Examples:
   }
 ]
 ```
+
+The role values in the **inspect** and **find** samples, `frame` and `button`, are role names as AT-SPI reports them on Linux (as recorded with Firefox 159). Role values are the text the backend reports, so they can differ between platforms and toolkits (see `role` under [Accessibility tree](#accessibility-tree)).
 
 **action (success)**:
 ```json

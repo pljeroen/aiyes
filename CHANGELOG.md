@@ -55,6 +55,10 @@
   - Positional arguments do not gain a description. The parameter descriptions of `scenario_run` and `scenario_preflight` are unchanged.
   - The MCP server builds its tool definitions when it starts: restart or reconnect a running server to see the descriptions.
 
+### Documentation
+
+- **Role values in the output examples of the manual and README**: the manual's node table and its `inspect` and `find` output samples, and the README's `role_drift` example, showed role values in command output as `push_button` or `menu_item`. They now show the text the backend reports: on Linux the AT-SPI role name, for example `button` or `menu item` (as recorded with Firefox 159), and on Android the widget class without its `android.widget.`, `android.view.` or `android.webkit.` prefix, for example `Button`. Command output and role matching do not change.
+
 ## [0.2.0] - 2026-05-08
 
 ### Added
