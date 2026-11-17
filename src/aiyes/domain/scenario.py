@@ -391,17 +391,43 @@ def _validate_find_step(
     normalizes to OPTIONAL (back-compat). A present value MUST be a JSON/Python
     bool; a present non-bool value is rejected deterministically with a stable
     path (steps[i].required) and code (find_required_not_boolean).
+    A present description_pattern must be a string or null.
     """
+    issues = _validate_description_pattern("find", item, path)
     if "required" not in item:
-        return ()
+        return issues
     required = item["required"]
     if isinstance(required, bool):
-        return ()
+        return issues
     return (
         _issue(
             f"{path}.required",
             "find_required_not_boolean",
             "find.required must be a boolean",
+        ),
+    ) + issues
+
+
+def _validate_description_pattern(
+    kind: str, item: Mapping[str, Any], path: str
+) -> Tuple[ScenarioValidationIssue, ...]:
+    """Check the optional description selector of a find or wait step.
+
+    An absent key, null or a string is accepted; any other value is rejected
+    with the path <path>.description_pattern and the code
+    <kind>_description_pattern_not_string. The free-text step key
+    "description" is a label and is not checked here.
+    """
+    if "description_pattern" not in item:
+        return ()
+    value = item["description_pattern"]
+    if value is None or isinstance(value, str):
+        return ()
+    return (
+        _issue(
+            f"{path}.description_pattern",
+            f"{kind}_description_pattern_not_string",
+            f"{kind}.description_pattern must be a string or null",
         ),
     )
 
@@ -515,6 +541,7 @@ def _validate_wait_step(
                     "wait.timeout must be a non-negative number",
                 )
             )
+    issues.extend(_validate_description_pattern("wait", item, path))
     return tuple(issues)
 
 

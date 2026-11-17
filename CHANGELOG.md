@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Select nodes by their accessible description**: on Linux, nodes show the accessible description the toolkit reports in a `description` key, and `find`, `wait` and `do` select by it with `--description TEXT` (`description_pattern` in MCP calls and in scenario `find` and `wait` steps). The whole description must match, with upper/lower case and runs of whitespace ignored; a part of it does not match. A description query that selects no node lists the whole descriptions that contain the given text. Measured with Qt (PySide6 6.11.2) and GTK3 apps; other toolkits were not measured. Selecting by description is not supported on Android sessions.
+- **Visible changes for callers** of `inspect`, `find`, `wait`, `do` and `diff` (CLI commands and MCP tools) and of scenario steps:
+  - Nodes whose description is not empty carry a new `description` key in the output of `inspect`, `find`, `do` (`found` and `verify`), `diff` (added and removed nodes) and scenario `find` and `inspect` steps. On Qt and GTK3 this includes widgets that only have a tooltip, which is reported as their description, and on Qt the application node, which reports the Python interpreter path. The other keys and their order are unchanged.
+  - `find`, `wait` and `do` take `--description`, and scenario `find` and `wait` steps take `description_pattern`. The input schemas of the MCP `find`, `wait` and `do` tools and their `help-json` entries gain one property, `description_pattern`, so the `do` schema has one more property.
+  - A description query that selects no node (`find` returning no node, without a scope or inside a scope that matched; `wait` timing out without ever selecting one; `do` finding none) carries `descriptions_containing` and `descriptions_containing_count` when some nodes that pass the other selectors have a description containing the given text. Such a `find` prints `{"nodes": [], ...}` instead of a bare `[]`.
+  - With default pruning, `--within-name` and `--within-role` on `find` (and the same keys of scenario `find` steps) also match named containers that pruning hides (nodes with role `filler` that have a name, such as Qt panels and tab pages), so a scoped query can return more nodes or another first node. Measured: with a group box and a plain panel both named "Dup", each holding a combo box, `find combo_box --within-name Dup` returned one combo box before and both now. Because `--within-name` matches a part of the name, a container whose name contains the given text is also reached.
+  - On Android sessions, `--description` or `description_pattern` with a value that is not empty or blank is refused with an error that says to select by name instead; an empty or blank value changes nothing.
+
 ### Fixed
 
 - **Tree pruning keeps the children of removed nodes**: default pruning in `inspect` and `find` removed `filler` and `redundant_object` nodes together with everything under them, so widgets inside such containers (for example in Qt Widgets apps) were missing from default output and could not be found. The children of a removed node are now kept and moved up to its parent. Nodes reported with the raw AT-SPI role `redundant object` (with a space) are now removed too, with their children moved up the same way; before, they stayed in default output.

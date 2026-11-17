@@ -732,6 +732,10 @@ def _build_dispatch_table(
         # also defaults to None). Mirrors the scenario conditional-inclusion.
         if "resource_id" in args:
             find_kwargs["resource_id"] = args.get("resource_id")
+        # The description selector is passed only when the caller sent the
+        # key, with its value unchanged (null, "" and blanks included).
+        if "description_pattern" in args:
+            find_kwargs["description_pattern"] = args.get("description_pattern")
         results = deps.find_uc.execute(**find_kwargs)
         return pres().format_find_nodes(results)
 
@@ -861,7 +865,7 @@ def _build_dispatch_table(
     ) -> str:
         timeout = args.get("timeout", 30.0)
         _reject_above_max("timeout", float(timeout), _MCP_MAX_TIMEOUT_SECONDS)
-        result = deps.wait_uc.execute(
+        wait_kwargs: Dict[str, Any] = dict(
             session_id=session_id,
             role=args["role"],
             name_pattern=args.get("name_pattern"),
@@ -870,12 +874,19 @@ def _build_dispatch_table(
             absent=args.get("absent", False),
             transient=args.get("transient", False),
         )
+        if "description_pattern" in args:
+            wait_kwargs["description_pattern"] = args.get("description_pattern")
+        result = deps.wait_uc.execute(**wait_kwargs)
         return pres().format_wait(
             found=result.found,
             timeout=result.timeout,
             node_id=result.id,
             transient=result.transient,
             role_drift=result.role_drift,
+            descriptions_containing=getattr(result, "descriptions_containing", None),
+            descriptions_containing_count=getattr(
+                result, "descriptions_containing_count", None
+            ),
         )
 
     def _handle_wait_stable(
@@ -924,7 +935,7 @@ def _build_dispatch_table(
     def _handle_do(
         args: Dict[str, Any], deps: ServerDependencies, session_id: str
     ) -> str:
-        result = deps.compound_do_uc.execute(
+        do_kwargs: Dict[str, Any] = dict(
             session_id=session_id,
             role=args["role"],
             action_name=args["action_name"],
@@ -933,6 +944,9 @@ def _build_dispatch_table(
             value=args.get("value"),
             timeout=args.get("timeout"),
         )
+        if "description_pattern" in args:
+            do_kwargs["description_pattern"] = args.get("description_pattern")
+        result = deps.compound_do_uc.execute(**do_kwargs)
         return pres().format_do(result)
 
     def _handle_doctor(

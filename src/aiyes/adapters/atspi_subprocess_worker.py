@@ -90,6 +90,16 @@ def _node_to_dict(
         except Exception as exc:
             _warn("get_actions", exc)
 
+        # Accessible description, kept as the toolkit reports it; None and a
+        # failed read give "". The node is emitted either way.
+        description = ""
+        try:
+            raw_description = accessible.get_description()  # type: ignore[union-attr]
+            if isinstance(raw_description, str):
+                description = raw_description
+        except Exception as exc:
+            _warn("get_description", exc)
+
         # Node ID via registry key (JSON array format, S-01 security fix)
         key = json.dumps([role_name, name, list(path)])
         if key not in registry:
@@ -117,6 +127,7 @@ def _node_to_dict(
             "bounds": list(bounds),
             "states": states,
             "actions": actions,
+            "description": description,
             "children": children,
         }
     except Exception as exc:

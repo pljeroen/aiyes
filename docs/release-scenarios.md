@@ -67,6 +67,32 @@ being verified. If a selector fails, scenario output includes bounded candidate
 diagnostics with likely alternatives and mismatch reasons such as role mismatch,
 name mismatch, not visible, or not actionable.
 
+## Description Selector
+
+Scenario `find` and `wait` steps accept `description_pattern`, with the meaning
+of the `--description` option of `aieyes find` and `aieyes wait`: the node's
+whole accessible description must match, with upper/lower case and runs of
+whitespace ignored, and it narrows together with the step's other selectors. A
+step without the key, or with `null`, `""` or only whitespace, applies no
+description filter. A present value that is neither a string nor `null` is
+rejected when the scenario is loaded and when it is preflighted
+(`find_description_pattern_not_string` or `wait_description_pattern_not_string`).
+Other step kinds do not take `description_pattern`.
+
+A step's `description` key is free text that labels the step; it never selects.
+
+When a `find` step with a non-blank `description_pattern` returns no node
+(without a scope, or inside a scope that matched), or such a `wait` step times
+out without ever selecting one, the step output carries
+`descriptions_containing` and `descriptions_containing_count` under the same
+rule as the command line: the whole descriptions, up to five, that contain the
+given text among nodes that pass the step's other selectors. Such a `find` step
+also adds `description_pattern`, as written, to the selector it records (the
+`requested_selector` an `action` step reports when it consumes the step's empty
+result) and to the summary of a required find's failure event. On Android
+sessions such a step fails with the error the command line gives: selecting by
+description is not supported there.
+
 ## Optional CI Pattern
 
 Default CI should validate scenario files and docs without requiring a real GUI

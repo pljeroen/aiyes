@@ -720,5 +720,7 @@ class TestWaitAbsentArchitecture:
             "id",
             "transient",
             "role_drift",
+            "descriptions_containing",
+            "descriptions_containing_count",
         }
         assert fields["found"] == "bool"

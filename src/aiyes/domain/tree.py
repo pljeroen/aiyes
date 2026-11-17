@@ -60,6 +60,9 @@ class Node:
     # and for Android elements without one. Appended AFTER stable_id so existing
     # positional/field-order expectations stay intact (AIYES-116/C1).
     resource_id: str = ""
+    # Accessible description as the toolkit reports it, kept unchanged; ""
+    # when there is none and on backends that do not report one (Android).
+    description: str = ""
 
     def __post_init__(self) -> None:
         """Ensure collection fields are truly immutable."""
@@ -237,6 +240,49 @@ def flatten_scoped_subtrees(ancestors: List[Node]) -> List[Node]:
     return result
 
 
+def is_named_filler(node: Node) -> bool:
+    """Return whether the node is a filler whose name is not blank.
+
+    Pruning removes every filler; a named one is still a scope for a find
+    with pruning on (see pruned_scope).
+    """
+    from aiyes.domain.matching import normalize_whitespace
+
+    return role_matches(node.role, "filler") and normalize_whitespace(node.name) != ""
+
+
+def pruned_scope(
+    unpruned: List[Node],
+    pruned: List[Node],
+    within_role: Optional[str],
+    within_name: Optional[str],
+) -> Tuple[List[Node], List[Node]]:
+    """Scope ancestors and candidate pool of a find with pruning on.
+
+    ``unpruned`` and ``pruned`` are the flattened nodes of the same snapshot
+    before and after pruning. The scope ancestors are the nodes that pass
+    the scope test (locate_ancestor_nodes) among the nodes pruning keeps and
+    the named fillers pruning removes, in unpruned tree order. The candidates
+    are the nodes of the pruned tree that lie below a matched ancestor in the
+    unpruned tree, in tree order and each once; a matched ancestor is a
+    candidate only when it lies below another one. Returns
+    ``(ancestors, candidates)``; both are empty when no ancestor matches.
+    """
+    kept = {node.id for node in pruned}
+    eligible = [node for node in unpruned if node.id in kept or is_named_filler(node)]
+    ancestors = locate_ancestor_nodes(eligible, within_role, within_name)
+    below: Set[str] = set()
+    for ancestor in ancestors:
+        below.update(descendant.id for descendant in flatten_nodes(ancestor.children))
+    candidates: List[Node] = []
+    seen: Set[str] = set()
+    for node in pruned:
+        if node.id in below and node.id not in seen:
+            seen.add(node.id)
+            candidates.append(node)
+    return ancestors, candidates
+
+
 @dataclasses.dataclass(frozen=True)
 class RoleDriftCandidate:
     """A node whose name matches the requested pattern but under a DIFFERENT
@@ -258,26 +304,51 @@ def find_role_drift(
     nodes: List[Node],
     role: str,
     name_pattern: Optional[str],
+    description_pattern: Optional[str] = None,
 ) -> Tuple[RoleDriftCandidate, ...]:
     """Shared role-drift detector (AIYES-114) — one definition, used by BOTH
     the find and wait use cases.
 
     Returns, in input (pre-order / stable) order, a ``RoleDriftCandidate`` for
-    every node in ``nodes`` whose name ``name_matches`` ``name_pattern`` AND
-    whose role is not equivalent to the requested ``role``. Self-guards to
-    ``()`` immediately when ``role == "*"`` or ``name_pattern`` is falsy
-    (None/empty) — drift is only meaningful when an exact role and a fixed
-    name are the axes of comparison.
+    every node in ``nodes`` whose role is not equivalent to the requested
+    ``role`` and that matches the other identifying selectors:
+
+    - when a description selector is given (description_selector_given), the
+      node's description matches it (description_matches) and, when
+      ``name_pattern`` is set, its name ``name_matches`` it;
+    - otherwise its name ``name_matches`` ``name_pattern``.
+
+    Self-guards to ``()`` when ``role == "*"``, or when neither a description
+    selector is given nor ``name_pattern`` is set (None/empty) — drift is only
+    meaningful when an exact role and a fixed name or description are the
+    axes of comparison.
 
     A node whose role ALREADY matches the requested role is never a candidate
     — this is why a state-only miss can never produce a false-positive
     role-drift diagnostic. The ``state`` axis is deliberately ignored: role
     drift is orthogonal to state. Pure: stdlib + aiyes.domain only.
     """
-    if role == "*" or not name_pattern:
-        return ()
+    from aiyes.domain.matching import (
+        description_matches,
+        description_selector_given,
+        name_matches,
+    )
 
-    from aiyes.domain.matching import name_matches
+    if role == "*":
+        return ()
+    if description_pattern is not None and description_selector_given(
+        description_pattern
+    ):
+        wanted = description_pattern
+        return tuple(
+            RoleDriftCandidate(id=n.id, role=n.role, name=n.name)
+            for n in nodes
+            if not role_matches(n.role, role)
+            and description_matches(n.description, wanted)
+            and (not name_pattern or name_matches(n.name, name_pattern))
+        )
+    if not name_pattern:
+        return ()
 
     return tuple(
         RoleDriftCandidate(id=n.id, role=n.role, name=n.name)
@@ -491,7 +562,9 @@ def raw_tree_to_domain(raw_data: object) -> AccessibilityTree:
     """Convert raw tree data (dict/list of dicts) to domain AccessibilityTree.
 
     Handles the standard format: {"tree": [node_dicts]} or [node_dicts].
-    Each node_dict has keys: id, role, name, bounds, states, actions, children, value.
+    Each node_dict has keys: id, role, name, bounds, states, actions, children,
+    value, and optionally stable_id, resource_id and description (a missing or
+    non-string description gives "").
     """
     if raw_data is None:
         return AccessibilityTree(roots=())
@@ -530,6 +603,7 @@ def _raw_node_to_domain(raw: dict) -> Optional[Node]:
         )
         if c is not None
     )
+    description = raw.get("description")
     return Node(
         id=node_id,
         role=raw.get("role") or "",
@@ -541,6 +615,7 @@ def _raw_node_to_domain(raw: dict) -> Optional[Node]:
         value=raw.get("value"),
         stable_id=raw.get("stable_id"),
         resource_id=raw.get("resource_id") or "",
+        description=description if isinstance(description, str) else "",
     )
 
 

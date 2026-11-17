@@ -229,6 +229,49 @@ filter matches nothing. Matched nodes surface a `resource_id` field in the
 following the same compaction convention as the context fields, the key is
 omitted entirely when empty (Linux/AT-SPI output is byte-identical to before).
 
+On Linux, nodes carry a `description` key with the accessible description the
+toolkit reports, shown only when it is not empty. Measured with Qt (PySide6
+6.11.2) and GTK3 apps, it is the description the application set or, when none
+is set, the widget's tooltip; Qt also reports the Python interpreter path as
+the description of the application node. Other toolkits were not measured. A
+tooltip is usually translated text, so addressing that stays stable across
+interface languages needs the application to set the accessible description.
+A change of description alone is not reported by `diff`.
+
+`find`, `wait` and `do` select by that description with `--description TEXT`
+(`description_pattern` in MCP calls and in scenario `find` and `wait` steps).
+The whole description must match, with upper/lower case and runs of whitespace
+ignored; unlike the name pattern, a part of the description does not match.
+`find combo_box --description frigate-class` returns the combo box whose
+accessible description is `frigate-class`, and not one described
+`frigate-class-old`. The option narrows together with the other selectors, an
+empty value means no description filter, and `do` acts on the first matching
+node in tree order.
+
+When a description query selects no node (`find` returns no node, without a
+scope or inside a scope that matched; `wait` times out without ever selecting
+one; `do` finds none) and some nodes that pass the other selectors have a
+description containing the given text, the result carries
+`descriptions_containing`, up to five of those whole descriptions in tree
+order, and `descriptions_containing_count`, how many there are. Each listed
+description, given as the selector on the same tree, selects a node. The keys
+are absent in every other case, including both outcomes of `wait --absent`; a
+`find` that would print a bare `[]` prints `{"nodes": [], ...}` with them.
+
+Selecting by description is not supported on Android sessions: a value that is
+not empty or blank is refused with an error, since Android nodes carry no
+description. A node without text is named by its content description there, so
+select it by name instead.
+
+With default pruning, named containers that pruning hides (nodes with role
+`filler` that have a name; on Qt, plain panels, tab widgets, tab pages, stacked
+pages and scroll areas) also count as `--within-name` / `--within-role` scopes,
+while `find` output still never shows them. On Qt a tab page is addressed by
+the page widget's accessible name, not by its tab title, which is a separate
+node; on GTK3 the tab title node holds the page. `matched_ancestors` can
+therefore name a container that default output does not show and whose id
+`action` does not accept after a default `find`.
+
 ## Release scenarios
 
 `aieyes scenario run` executes deterministic scenario files for release-smoke

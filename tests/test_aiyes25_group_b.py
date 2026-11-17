@@ -1685,7 +1685,15 @@ class TestWaitResultFieldsUpdated:
         from aiyes.domain.use_cases.wait import WaitResult
 
         fields = {f.name for f in dataclasses.fields(WaitResult)}
-        assert fields == {"found", "timeout", "id", "transient", "role_drift"}
+        assert fields == {
+            "found",
+            "timeout",
+            "id",
+            "transient",
+            "role_drift",
+            "descriptions_containing",
+            "descriptions_containing_count",
+        }
 
 
 class TestSessionStatusSessionNotFound:

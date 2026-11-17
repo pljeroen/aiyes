@@ -5,7 +5,14 @@ from __future__ import annotations
 import dataclasses
 from typing import Optional, Tuple
 
-from aiyes.domain.matching import name_matches, role_matches
+from aiyes.domain.matching import (
+    android_description_refusal,
+    description_matches,
+    description_selector_given,
+    descriptions_containing,
+    name_matches,
+    role_matches,
+)
 from aiyes.domain.tree import RoleDriftCandidate, find_role_drift, flatten_nodes
 from aiyes.ports.accessibility_tree import AccessibilityTreePort
 from aiyes.ports.clock import ClockPort
@@ -27,6 +34,12 @@ class WaitResult:
     # would leak a ()-default as an always-present "role_drift": [] key. None on
     # every success / absent / present branch keeps those outputs byte-identical.
     role_drift: Optional[Tuple[RoleDriftCandidate, ...]] = None
+    # Set only on the two "target never matched" timeouts of a description
+    # query: up to five whole descriptions that contain the given text, among
+    # the nodes of the last poll that pass the other selectors, and how many
+    # such descriptions there are. None otherwise, like role_drift.
+    descriptions_containing: Optional[Tuple[str, ...]] = None
+    descriptions_containing_count: Optional[int] = None
 
 
 class WaitUseCase:
@@ -57,6 +70,7 @@ class WaitUseCase:
         state: Optional[str] = None,
         absent: bool = False,
         transient: bool = False,
+        description_pattern: Optional[str] = None,
     ) -> WaitResult:
         """Wait for a node matching role/name/state to appear or disappear.
 
@@ -73,6 +87,15 @@ class WaitUseCase:
         returns WaitResult(found=True, transient=True, id=first_seen_id).
         Mutually exclusive with absent.
 
+        ``description_pattern``, when given (description_selector_given),
+        narrows each poll's match to nodes whose whole description matches it
+        (description_matches), together with the other selectors. On the two
+        "never matched" timeouts the result then also lists the descriptions
+        that contain it among the last poll's nodes that pass the other
+        selectors. On an Android session a given description selector is
+        refused before the first poll. A selector that is not given changes
+        nothing.
+
         Timeout is NOT an error (exit 0).
         """
         if transient and absent:
@@ -84,6 +107,10 @@ class WaitUseCase:
         session = self._session_repo.load(session_id)
         if session is None:
             raise RuntimeError(f"Session not found: {session_id}")
+        refusal = android_description_refusal(session.backend, description_pattern)
+        if refusal is not None:
+            raise RuntimeError(refusal)
+        described = description_selector_given(description_pattern)
 
         poll_interval = (
             self.TRANSIENT_POLL_INTERVAL if transient else self.POLL_INTERVAL
@@ -111,6 +138,14 @@ class WaitUseCase:
             # Filter by state
             if state is not None:
                 nodes = [n for n in nodes if state in n.states]
+
+            # The nodes that pass every selector but the description; a given
+            # description selector then keeps those whose whole description
+            # matches.
+            other_selected = nodes
+            if described and description_pattern is not None:
+                wanted = description_pattern
+                nodes = [n for n in nodes if description_matches(n.description, wanted)]
 
             if transient:
                 # Accumulate seen IDs across all polls
@@ -151,16 +186,28 @@ class WaitUseCase:
                             transient=True,
                             id=seen_ids[0],
                         )
-                    # Never seen (transient) — a genuine "target never matched"
-                    # timeout: attach the role-drift diagnostic (C2).
-                    drift = find_role_drift(all_nodes, role, name_pattern)
-                    return WaitResult(
-                        found=False, timeout=True, role_drift=drift or None
-                    )
                 if absent:
                     return WaitResult(found=True, timeout=True)
-                # Normal-mode "target never matched" timeout — attach role drift.
-                drift = find_role_drift(all_nodes, role, name_pattern)
-                return WaitResult(found=False, timeout=True, role_drift=drift or None)
+                # A "target never matched" timeout (normal mode, or transient
+                # mode with nothing seen): attach the role-drift diagnostic and,
+                # for a description query, the descriptions that contain it.
+                drift = find_role_drift(
+                    all_nodes, role, name_pattern, description_pattern
+                )
+                listed: Optional[Tuple[str, ...]] = None
+                listed_count: Optional[int] = None
+                if described and description_pattern is not None:
+                    texts, count = descriptions_containing(
+                        (n.description for n in other_selected), description_pattern
+                    )
+                    if count:
+                        listed, listed_count = texts, count
+                return WaitResult(
+                    found=False,
+                    timeout=True,
+                    role_drift=drift or None,
+                    descriptions_containing=listed,
+                    descriptions_containing_count=listed_count,
+                )
 
             self._clock.sleep(poll_interval)

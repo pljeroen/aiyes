@@ -11,7 +11,12 @@ import sys
 from collections.abc import Mapping, Sequence
 from typing import Any, Optional
 
-from aiyes.domain.matching import name_matches, normalize_whitespace, role_matches
+from aiyes.domain.matching import (
+    description_selector_given,
+    name_matches,
+    normalize_whitespace,
+    role_matches,
+)
 from aiyes.domain.scenario import (
     _EXPECT_ANY,
     _EXPECT_REFUSED,
@@ -562,6 +567,13 @@ class ScenarioUseCaseExecutor:
     def _find_summary(step: ScenarioStep, output: Mapping[str, Any]) -> str:
         role = step.parameters.get("role", "*")
         name_pattern = step.parameters.get("name_pattern", step.parameters.get("name"))
+        description_pattern = step.parameters.get("description_pattern")
+        if description_selector_given(description_pattern):
+            return (
+                f"required find {step.id!r} matched zero nodes "
+                f"(role={role!r}, name_pattern={name_pattern!r}, "
+                f"description_pattern={description_pattern!r})"
+            )
         return (
             f"required find {step.id!r} matched zero nodes "
             f"(role={role!r}, name_pattern={name_pattern!r})"
@@ -1096,7 +1108,9 @@ class ScenarioUseCaseExecutor:
                 screenshot_base64=bool(params.get("screenshot_base64", False)),
                 focus_window=params.get("focus_window"),
             )
-            return _jsonable_dict(result), ""
+            inspected = _jsonable_dict(result)
+            _drop_empty_descriptions(inspected)
+            return inspected, ""
 
         if step.kind == "find":
             session_id = self._require_session()
@@ -1120,6 +1134,11 @@ class ScenarioUseCaseExecutor:
             # conditional-inclusion precedent; the use case also defaults to None).
             if "resource_id" in params:
                 find_kwargs["resource_id"] = params.get("resource_id")
+            # The description selector is passed only when the step has the
+            # key, with its value unchanged. The free-text "description" key
+            # of a step is a label and never selects.
+            if "description_pattern" in params:
+                find_kwargs["description_pattern"] = params.get("description_pattern")
             result = self._find.execute(**find_kwargs)
             nodes = [_find_node_jsonable(node) for node in result]
             output: dict[str, Any] = {"nodes": nodes}
@@ -1137,6 +1156,12 @@ class ScenarioUseCaseExecutor:
                 output["role_drift"] = [
                     _jsonable_dict(candidate) for candidate in role_drift
                 ]
+            listed = getattr(result, "descriptions_containing", None)
+            if isinstance(listed, (list, tuple)) and listed:
+                output["descriptions_containing"] = list(listed)
+                output["descriptions_containing_count"] = getattr(
+                    result, "descriptions_containing_count", None
+                )
             if not nodes:
                 diagnostics = _selector_diagnostics(
                     _inspect_tree_snapshot(self._inspect, session_id),
@@ -1194,15 +1219,18 @@ class ScenarioUseCaseExecutor:
             return output, ""
 
         if step.kind == "wait" and self._wait is not None:
-            result = self._wait.execute(
-                session_id=self._require_session(),
-                role=str(params.get("role", "*")),
-                name_pattern=params.get("name_pattern", params.get("name")),
-                timeout=params.get("timeout"),
-                state=params.get("state"),
-                absent=bool(params.get("absent", False)),
-                transient=bool(params.get("transient", False)),
-            )
+            wait_kwargs: dict[str, Any] = {
+                "session_id": self._require_session(),
+                "role": str(params.get("role", "*")),
+                "name_pattern": params.get("name_pattern", params.get("name")),
+                "timeout": params.get("timeout"),
+                "state": params.get("state"),
+                "absent": bool(params.get("absent", False)),
+                "transient": bool(params.get("transient", False)),
+            }
+            if "description_pattern" in params:
+                wait_kwargs["description_pattern"] = params.get("description_pattern")
+            result = self._wait.execute(**wait_kwargs)
             return _jsonable_dict(result), ""
 
         if step.kind == "wait_reactive" and self._reactive_wait is not None:
@@ -1402,12 +1430,18 @@ def _requested_selector_triple(params: Mapping[str, Any]) -> dict[str, Any]:
     Mirrors the find branch of _execute: name_pattern falls back to name. The
     triple is recorded for every find so a consumed-empty action can attribute
     requested_selector independent of selector_diagnostics (FC-DIAG-06).
+    A given description selector (description_selector_given) is added as
+    description_pattern, as written; a value that is not given is left out.
     """
-    return {
+    selector = {
         "role": str(params.get("role", "*")),
         "name_pattern": params.get("name_pattern", params.get("name")),
         "state": params.get("state"),
     }
+    description_pattern = params.get("description_pattern")
+    if description_selector_given(description_pattern):
+        selector["description_pattern"] = description_pattern
+    return selector
 
 
 def _start_kwargs(params: Mapping[str, Any]) -> dict[str, Any]:
@@ -1484,7 +1518,26 @@ def _find_node_jsonable(node: Any) -> dict[str, Any]:
     node_dict = _jsonable_dict(node)
     if not node_dict.get("resource_id"):
         node_dict.pop("resource_id", None)
+    if not node_dict.get("description"):
+        node_dict.pop("description", None)
     return node_dict
+
+
+def _drop_empty_descriptions(inspected: dict[str, Any]) -> None:
+    """Remove "description": "" from every node of an inspect step's tree.
+
+    Node dicts of scenario output carry the description only when it is not
+    "", as on the other node-output surfaces. Changes ``inspected`` in place.
+    """
+    tree = inspected.get("tree")
+    pending = list(tree.get("roots", [])) if isinstance(tree, dict) else []
+    while pending:
+        node_dict = pending.pop()
+        if not isinstance(node_dict, dict):
+            continue
+        if node_dict.get("description") == "":
+            del node_dict["description"]
+        pending.extend(node_dict.get("children", []))
 
 
 def _to_jsonable(value: Any) -> Any:

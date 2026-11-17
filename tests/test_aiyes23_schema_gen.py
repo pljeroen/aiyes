@@ -490,6 +490,7 @@ class TestRequiredVsOptional:
             "session_id",
             "role",
             "name_pattern",
+            "description_pattern",
             "action_name",
             "verify",
             "value",

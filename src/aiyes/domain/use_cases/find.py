@@ -5,7 +5,14 @@ from __future__ import annotations
 import dataclasses
 from typing import List, Optional, Tuple
 
-from aiyes.domain.matching import name_matches, role_matches
+from aiyes.domain.matching import (
+    android_description_refusal,
+    description_matches,
+    description_selector_given,
+    descriptions_containing,
+    name_matches,
+    role_matches,
+)
 from aiyes.domain.tree import (
     RoleDriftCandidate,
     enrich_tree,
@@ -14,6 +21,7 @@ from aiyes.domain.tree import (
     flatten_scoped_subtrees,
     locate_ancestor_nodes,
     prune_tree,
+    pruned_scope,
 )
 from aiyes.ports.accessibility_tree import AccessibilityTreePort
 from aiyes.ports.storage import SessionRepositoryPort
@@ -40,6 +48,8 @@ class FoundNode:
     # Android view resource-id surfaced from the source Node; "" otherwise
     # (AIYES-116/C2). Appended AFTER sibling_count.
     resource_id: str = ""
+    # Accessible description surfaced from the source Node; "" when none.
+    description: str = ""
 
     def __post_init__(self) -> None:
         """Ensure collection fields are truly immutable."""
@@ -94,6 +104,8 @@ class FindResult(list):
         scope_matched: bool = True,
         matched_ancestors: Tuple[AncestorRef, ...] = (),
         role_drift: Tuple[RoleDriftCandidate, ...] = (),
+        descriptions_containing: Optional[Tuple[str, ...]] = None,
+        descriptions_containing_count: Optional[int] = None,
     ) -> None:
         super().__init__(nodes)
         self.scope_requested = scope_requested
@@ -103,6 +115,12 @@ class FindResult(list):
         # zero-match exact-role find. Empty on every match / non-drift path. A
         # side-channel only — never changes the list contents (C3).
         self.role_drift: Tuple[RoleDriftCandidate, ...] = tuple(role_drift)
+        # Set only when a description query selects no node: up to five whole
+        # descriptions that contain the given text, among the nodes that pass
+        # the other selectors, and how many such descriptions there are.
+        # None on every other result; never changes the list contents.
+        self.descriptions_containing = descriptions_containing
+        self.descriptions_containing_count = descriptions_containing_count
 
     @property
     def nodes(self) -> Tuple[FoundNode, ...]:
@@ -133,6 +151,7 @@ class FindUseCase:
         within_role: Optional[str] = None,
         within_name: Optional[str] = None,
         resource_id: Optional[str] = None,
+        description_pattern: Optional[str] = None,
     ) -> FindResult:
         """Find nodes matching role, optional name pattern, and optional state.
 
@@ -142,6 +161,16 @@ class FindUseCase:
         feed the existing role/name_pattern/state filter chain. An absent
         ancestor is a structured scoped-miss (``scope_matched=False``), NEVER a
         silent whole-tree fallback. Unscoped calls are byte-for-byte unchanged.
+        With pruning on, a named filler that pruning removes is a scope
+        ancestor too (pruned_scope); the candidates stay pruned-tree nodes.
+
+        ``description_pattern``, when given (description_selector_given),
+        narrows the selection to nodes whose whole description matches it
+        (description_matches), together with the other selectors. When it
+        then selects no node, the result lists the descriptions that contain
+        it among the nodes that pass the other selectors. On an Android
+        session a given description selector is refused before the tree is
+        read. A selector that is not given changes nothing.
         """
         session = self._session_repo.load(session_id)
         if session is None:
@@ -149,12 +178,16 @@ class FindUseCase:
                 f"Session not found: {session_id}. "
                 "Run 'aieyes session list' to see available sessions."
             )
+        refusal = android_description_refusal(session.backend, description_pattern)
+        if refusal is not None:
+            raise RuntimeError(refusal)
+        described = description_selector_given(description_pattern)
 
         # Port returns AccessibilityTree domain type
-        domain_tree = self._tree.get_tree(session)
+        unpruned_tree = self._tree.get_tree(session)
 
         # Apply pruning (default: prune=True, unless no_prune is set)
-        domain_tree = prune_tree(domain_tree, prune=not no_prune)
+        domain_tree = prune_tree(unpruned_tree, prune=not no_prune)
 
         # Enrich tree with context fields
         domain_tree = enrich_tree(domain_tree)
@@ -171,7 +204,13 @@ class FindUseCase:
         scope_requested = within_role is not None or within_name is not None
         matched_ancestors: Tuple[AncestorRef, ...] = ()
         if scope_requested:
-            ancestors = locate_ancestor_nodes(nodes, within_role, within_name)
+            if no_prune:
+                ancestors = locate_ancestor_nodes(nodes, within_role, within_name)
+                scoped_nodes = flatten_scoped_subtrees(ancestors)
+            else:
+                ancestors, scoped_nodes = pruned_scope(
+                    flatten_nodes(unpruned_tree.roots), nodes, within_role, within_name
+                )
             if not ancestors:
                 # Structured scoped-miss (R2/C2): return immediately WITHOUT
                 # running the filter chain over the whole tree — no fallback.
@@ -185,7 +224,7 @@ class FindUseCase:
                 AncestorRef(id=a.id, role=a.role, name=a.name) for a in ancestors
             )
             # Candidate pool = the matched ancestors' descendants only.
-            nodes = flatten_scoped_subtrees(ancestors)
+            nodes = scoped_nodes
 
         # AIYES-114: capture the pre-role-filter pool (scope-respecting) so the
         # role-drift diagnostic sees nodes of every role. On a scoped call this
@@ -212,6 +251,13 @@ class FindUseCase:
         if resource_id:
             nodes = [n for n in nodes if n.resource_id == resource_id]
 
+        # The nodes that pass every selector but the description; a given
+        # description selector then keeps those whose whole description matches.
+        other_selected = nodes
+        if described and description_pattern is not None:
+            wanted = description_pattern
+            nodes = [n for n in nodes if description_matches(n.description, wanted)]
+
         # Convert domain Nodes to FoundNode result objects
         found: List[FoundNode] = []
         for n in nodes:
@@ -230,16 +276,28 @@ class FindUseCase:
                     depth=n.depth,
                     sibling_count=n.sibling_count,
                     resource_id=n.resource_id,
+                    description=n.description,
                 )
             )
 
         # AIYES-114 diagnostic-only role drift: computed ONLY on the zero-match
         # path, purely to populate the additive side-channel. It never feeds back
         # into the matched set above (C3/FC-FINDPURE-02). The detector self-guards
-        # to () for role=='*' / falsy name_pattern.
+        # to () for role=='*', and when neither a name pattern is set nor a
+        # description selector is given.
         role_drift: Tuple[RoleDriftCandidate, ...] = ()
+        listed: Optional[Tuple[str, ...]] = None
+        listed_count: Optional[int] = None
         if not found:
-            role_drift = find_role_drift(pre_role_nodes, role, name_pattern)
+            role_drift = find_role_drift(
+                pre_role_nodes, role, name_pattern, description_pattern
+            )
+            if described and description_pattern is not None:
+                texts, count = descriptions_containing(
+                    (n.description for n in other_selected), description_pattern
+                )
+                if count:
+                    listed, listed_count = texts, count
 
         return FindResult(
             nodes=tuple(found),
@@ -247,4 +305,6 @@ class FindUseCase:
             scope_matched=True,
             matched_ancestors=matched_ancestors,
             role_drift=role_drift,
+            descriptions_containing=listed,
+            descriptions_containing_count=listed_count,
         )

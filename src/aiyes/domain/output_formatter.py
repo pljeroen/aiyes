@@ -63,6 +63,9 @@ def node_to_dict(
     # field, so an empty value must produce byte-identical pre-change output).
     if node.resource_id:
         result["resource_id"] = node.resource_id
+    # The accessible description, as reported, only when it is not "".
+    if node.description:
+        result["description"] = node.description
 
     # Context fields — only include when non-None (compactness)
     if node.parent_role is not None:

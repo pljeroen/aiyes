@@ -154,6 +154,12 @@ def format_find_nodes(result: "FindResult | List[FoundNode]") -> str:
     On the unscoped path (a plain list, or a FindResult with
     ``scope_requested`` False) the output is a BARE JSON array, byte-for-byte
     identical to the pre-AIYES-113 output.
+
+    A node's ``description`` key is present only when its description is not
+    "". When a description query selected no node and some nodes that pass
+    the other selectors have a description containing the given text, the
+    envelope also carries ``descriptions_containing`` and
+    ``descriptions_containing_count``, after the other keys.
     """
     _CONTEXT_FIELDS = (
         "parent_role",
@@ -174,18 +180,24 @@ def format_find_nodes(result: "FindResult | List[FoundNode]") -> str:
         # falsy-but-not-None field, so an empty value keeps output byte-identical).
         if not d.get("resource_id"):
             d.pop("resource_id", None)
+        if not d.get("description"):
+            d.pop("description", None)
         node_dicts.append(d)
     masked = [mask_node_dict(d) for d in node_dicts]
 
     scope_requested = getattr(result, "scope_requested", False)
     role_drift = getattr(result, "role_drift", ())
+    listing = _description_listing(
+        getattr(result, "descriptions_containing", None),
+        getattr(result, "descriptions_containing_count", None),
+    )
 
     # AIYES-114 three-way envelope: widen the trigger to `scope_requested OR
     # role_drift`. Unscoped-and-no-drift stays a byte-identical bare array; a
     # scope-only (no drift) call stays the byte-identical AIYES-113 two-key
     # envelope (role_drift key OMITTED, never []); a non-empty role_drift yields
     # an envelope carrying the diagnostic.
-    if scope_requested or role_drift:
+    if scope_requested or role_drift or listing:
         envelope: Dict[str, Any] = {"nodes": masked}
         if scope_requested:
             # Read like scope_requested above: any result that requests scope
@@ -200,9 +212,23 @@ def format_find_nodes(result: "FindResult | List[FoundNode]") -> str:
             envelope["role_drift"] = [
                 {"id": c.id, "role": c.role, "name": c.name} for c in role_drift
             ]
+        envelope.update(listing)
         return json.dumps(envelope, indent=2)
 
     return json.dumps(masked, indent=2)
+
+
+def _description_listing(texts: Any, count: Any) -> Dict[str, Any]:
+    """The listing keys of a description query that selected no node.
+
+    Empty unless ``texts`` is a non-empty list or tuple of descriptions.
+    """
+    if isinstance(texts, (list, tuple)) and texts:
+        return {
+            "descriptions_containing": list(texts),
+            "descriptions_containing_count": count,
+        }
+    return {}
 
 
 def format_screenshot(
@@ -264,7 +290,9 @@ def format_do(do_result: CompoundDoResult) -> str:
 
     Applies password masking to found node and verify tree. The action
     object carries "reason" only when it has one (an action with status
-    "error").
+    "error"). A description query that found no node can add
+    "descriptions_containing" and "descriptions_containing_count" after
+    "error".
     """
     output: Dict[str, Any] = {}
     if do_result.found is not None:
@@ -280,6 +308,12 @@ def format_do(do_result: CompoundDoResult) -> str:
         output["verify"] = mask_node_dict(verify_dict)
     if do_result.error is not None:
         output["error"] = do_result.error
+    output.update(
+        _description_listing(
+            do_result.descriptions_containing,
+            do_result.descriptions_containing_count,
+        )
+    )
     return json.dumps(output, indent=2)
 
 
@@ -384,13 +418,17 @@ def format_wait(
     node_id: Optional[str] = None,
     transient: bool = False,
     role_drift: Any = None,
+    descriptions_containing: Any = None,
+    descriptions_containing_count: Any = None,
 ) -> str:
     """Convert wait result to JSON string.
 
     Includes transient=true in output only when the flag is set. AIYES-114: the
     role_drift diagnostic (same {id, role, name} shape as a find envelope) is
     emitted ONLY when non-empty — the key is OMITTED entirely otherwise (never
-    null, never []), so existing wait output stays byte-identical.
+    null, never []), so existing wait output stays byte-identical. The listing
+    of a description query that never matched (``descriptions_containing``
+    and ``descriptions_containing_count``) follows it under the same rule.
     """
     result: Dict[str, Any] = {"found": found}
     if node_id is not None:
@@ -402,6 +440,9 @@ def format_wait(
         result["role_drift"] = [
             {"id": c.id, "role": c.role, "name": c.name} for c in role_drift
         ]
+    result.update(
+        _description_listing(descriptions_containing, descriptions_containing_count)
+    )
     return json.dumps(result, indent=2)
 
 

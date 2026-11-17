@@ -54,6 +54,7 @@ The accessibility tree is a structured representation of the GUI. Every visible 
 | `states` | Current states: `focused`, `checked`, `enabled`, `selected`, etc. |
 | `actions` | Available actions: `click`, `activate`, `set_text`, etc. |
 | `value` | Current value (for text fields, sliders, etc.) |
+| `description` | Accessible description as the toolkit reports it, shown only when it is not empty (Linux). Measured on Qt and GTK3: the description the app set or, when none is set, the widget's tooltip; on Qt the application node reports the Python interpreter path |
 | `children` | Nested child nodes |
 
 Context fields (populated when tree enrichment is enabled):
@@ -94,6 +95,8 @@ By default, both `inspect` and `find` prune noise from the tree before they retu
 - Unnamed `panel` nodes are collapsed when exactly one child is left after their own children have been pruned. An unnamed panel left with no children, or with two or more, is kept.
 
 Moved-up nodes keep their node IDs, so an ID found by a default `inspect` or `find` can be passed to `action`. `--tree-depth` counts depth in the pruned tree.
+
+Named containers that pruning hides still count as scopes for `find --within-name` and `--within-role`: a node with role `filler` that has a name is a scope ancestor, although `find` output never shows it. On Qt, plain panels, tab widgets, tab pages, stacked pages and scroll areas are such nodes; a tab page is addressed by the page widget's accessible name, not by its tab title, which is a separate node, while on GTK3 the tab title node holds the page. Such a container can appear in `matched_ancestors` although default output does not show it, and `action` does not accept its ID after a default `find`.
 
 Use `inspect --no-prune` to get the raw tree. The `find` command has no `--no-prune` option.
 
@@ -179,15 +182,20 @@ aieyes inspect --screenshot-base64
 
 Search the tree for nodes matching a role and optional name pattern.
 
+`--description TEXT` selects by the node's whole accessible description (the `description` field). Upper/lower case and runs of whitespace are ignored; unlike the name pattern, a part of the description does not match. It narrows together with the role, the name pattern, `--state`, `--within-name`, `--within-role` and `--resource-id`, and an empty value means no description filter. A tooltip reported as the description is usually translated text, so addressing that stays stable across interface languages needs the app to set the accessible description. Selecting by description is not supported on Android sessions (see [Android limitations](#android-limitations)).
+
+When a description query returns no node, without a scope or inside a scope that matched, and some nodes that pass the other selectors have a description containing the given text, the output is the object `{"nodes": [], ...}` with `descriptions_containing` (up to five of those whole descriptions, in tree order) and `descriptions_containing_count` (how many there are) after any `scope_matched`, `matched_ancestors` and `role_drift` keys. Each listed description, given as `--description` on the same tree, selects a node. A scope that matched nothing (`"scope_matched": false`) lists none.
+
 ```bash
 aieyes find button "Submit"
 aieyes find textbox --state focused
 aieyes find menu_item "Save"
+aieyes find combo_box --description "Shipping method"
 ```
 
 #### `aieyes diff [--session ID]`
 
-Compare the stored tree (from last `inspect`) against the live tree. Shows added, removed, and changed nodes.
+Compare the stored tree (from last `inspect`) against the live tree. Shows added, removed, and changed nodes. A change of a node's description alone is not reported.
 
 #### `aieyes wait ROLE [NAME_PATTERN] [OPTIONS]`
 
@@ -199,6 +207,7 @@ Poll until a matching node appears (or disappears).
 | `--state STATE` | — | Node must have this state |
 | `--absent` | `false` | Wait for the node to disappear |
 | `--transient` | `false` | Detect transient elements (toasts, snackbars) |
+| `--description TEXT` | — | The node's whole accessible description must match, as for `find --description`. When the wait times out without ever selecting a node, the output lists the descriptions that contain the text after `role_drift`, as for `find`; it never does with `--absent` |
 
 ```bash
 aieyes wait dialog "Save changes"
@@ -333,6 +342,7 @@ Compound command: find a node, execute an action, optionally verify.
 | `--value TEXT` | Value to pass to action |
 | `--verify` | Re-inspect after action to verify state change |
 | `--timeout SECONDS` | Timeout for the find phase |
+| `--description TEXT` | The node's whole accessible description must match, as for `find --description`; the action goes to the first matching node in tree order. When no node is found, the output lists the descriptions that contain the text after `"error"`, as for `find` |
 
 ```bash
 aieyes do --role button --name Submit --action click --verify
@@ -608,6 +618,7 @@ Android support is intended for adb-connected emulators and trusted devices. It 
   true native accessibility event subscription in this wave.
 - Reliable targeting depends on app-provided text, `contentDescription`, resource IDs, or Compose semantics/test tags.
 - Some text clearing and custom widgets can require fallback input strategies.
+- Selecting by description is not supported on Android sessions: `--description` or `description_pattern` with a value that is not empty or blank is refused with an error, and nodes carry no `description` key. A node without text is named by its content description, so select it by name instead: `NAME_PATTERN` on `find` and `wait`, `--name` on `do`, `name_pattern` in MCP calls and scenario steps.
 
 ### Recommended workflow
 

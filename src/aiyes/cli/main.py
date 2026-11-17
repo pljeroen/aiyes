@@ -638,6 +638,22 @@ def diff_cmd(session_id: Optional[str]) -> None:
 
 # ─── Find ─────────────────────────────────────────────────────────────
 
+# One help text for --description on find, wait and do; the generated
+# help-json and MCP tool definitions carry it as the description_pattern
+# parameter's description.
+DESCRIPTION_SELECTOR_HELP = (
+    "Match the node's whole accessible description (the 'description' field "
+    "of inspect and find output). Upper/lower case and runs of whitespace are "
+    "ignored; a part of the description does not match. Narrows together with "
+    "the other selectors. When no node is selected (find finds none in the "
+    "tree or in a matched scope, wait times out without ever selecting one, "
+    "do finds none), the result lists in descriptions_containing up to five "
+    "whole descriptions that contain the given text, from nodes that pass the "
+    "other selectors, and their number in descriptions_containing_count; each "
+    "can be given as the value. An empty value means no description filter. "
+    "Not supported on Android sessions."
+)
+
 
 @cli.command("find")
 @click.option("--session", "session_id", default=None, help="Session ID.")
@@ -645,13 +661,16 @@ def diff_cmd(session_id: Optional[str]) -> None:
 @click.option(
     "--within-name",
     default=None,
-    help="Restrict search to descendants of an ancestor matching this name pattern.",
+    help="Restrict search to descendants of an ancestor matching this name pattern. "
+    "Named containers with role filler, which default output hides (for example "
+    "Qt panels and tab pages), also count as scopes.",
 )
 @click.option(
     "--within-role",
     default=None,
     help="Restrict search to descendants of an ancestor matching this role "
-    "(used with --within-name).",
+    "(used with --within-name). Named containers with role filler, which default "
+    "output hides (for example Qt panels and tab pages), also count as scopes.",
 )
 @click.option(
     "--resource-id",
@@ -659,6 +678,12 @@ def diff_cmd(session_id: Optional[str]) -> None:
     default=None,
     help="Match nodes by EXACT Android resource-id (full-string, not substring "
     "or regex). Android-only; ignored on Linux/AT-SPI nodes (which have none).",
+)
+@click.option(
+    "--description",
+    "description_pattern",
+    default=None,
+    help=DESCRIPTION_SELECTOR_HELP,
 )
 @click.argument("role")
 @click.argument("name_pattern", default=None, required=False)
@@ -668,6 +693,7 @@ def find_cmd(
     within_name: Optional[str],
     within_role: Optional[str],
     resource_id: Optional[str],
+    description_pattern: Optional[str],
     role: str,
     name_pattern: Optional[str],
 ) -> None:
@@ -686,6 +712,7 @@ def find_cmd(
             within_role=within_role,
             within_name=within_name,
             resource_id=resource_id,
+            description_pattern=description_pattern,
         )
         click.echo(format_find_nodes(results))
     except Exception as exc:
@@ -1086,6 +1113,12 @@ def type_cmd(session_id: Optional[str], delay_ms: int, text: str) -> None:
     default=False,
     help="Detect transient elements (toasts/snackbars) that appear then disappear.",
 )
+@click.option(
+    "--description",
+    "description_pattern",
+    default=None,
+    help=DESCRIPTION_SELECTOR_HELP,
+)
 @click.argument("role")
 @click.argument("name_pattern", default=None, required=False)
 def wait_cmd(
@@ -1094,6 +1127,7 @@ def wait_cmd(
     state: Optional[str],
     absent: bool,
     transient: bool,
+    description_pattern: Optional[str],
     role: str,
     name_pattern: Optional[str],
 ) -> None:
@@ -1112,6 +1146,7 @@ def wait_cmd(
             state=state,
             absent=absent,
             transient=transient,
+            description_pattern=description_pattern,
         )
         click.echo(
             format_wait(
@@ -1120,6 +1155,12 @@ def wait_cmd(
                 node_id=result.id,
                 transient=result.transient,
                 role_drift=result.role_drift,
+                descriptions_containing=getattr(
+                    result, "descriptions_containing", None
+                ),
+                descriptions_containing_count=getattr(
+                    result, "descriptions_containing_count", None
+                ),
             )
         )
     except Exception as exc:
@@ -1273,6 +1314,12 @@ def wait_stable_cmd(
     help="Substring to match in node name (case-insensitive, whitespace-normalized). "
     "E.g. 'Home' matches 'Home\\nTab 1 of 4'.",
 )
+@click.option(
+    "--description",
+    "description_pattern",
+    default=None,
+    help=DESCRIPTION_SELECTOR_HELP,
+)
 @click.option("--action", "action_name", required=True, help="Action to execute.")
 @click.option("--verify", is_flag=True, default=False, help="Verify tree after action.")
 @click.option("--value", default=None, help="Value to pass to action.")
@@ -1286,6 +1333,7 @@ def do_cmd(
     session_id: Optional[str],
     role: str,
     name_pattern: Optional[str],
+    description_pattern: Optional[str],
     action_name: str,
     verify: bool,
     value: Optional[str],
@@ -1306,6 +1354,7 @@ def do_cmd(
             verify=verify,
             value=value,
             timeout=timeout,
+            description_pattern=description_pattern,
         )
         click.echo(format_do(result))
     except Exception as exc:

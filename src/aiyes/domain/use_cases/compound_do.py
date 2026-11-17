@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import Optional
+from typing import List, Optional, Tuple
 
-from aiyes.domain.matching import name_matches, role_matches
+from aiyes.domain.matching import (
+    android_description_refusal,
+    description_matches,
+    description_selector_given,
+    descriptions_containing,
+    name_matches,
+    role_matches,
+)
 from aiyes.domain.tree import AccessibilityTree, Node, flatten_nodes
 from aiyes.domain.use_cases.action import failed_action_reason
 from aiyes.ports.accessibility_action import AccessibilityActionPort
@@ -32,12 +39,21 @@ class CompoundActionResult:
 
 @dataclasses.dataclass(frozen=True)
 class CompoundDoResult:
-    """Result of a compound do operation."""
+    """Result of a compound do operation.
+
+    ``descriptions_containing`` and ``descriptions_containing_count`` are set
+    only when a description query finds no node: up to five whole
+    descriptions that contain the given text, among the nodes of the last
+    poll that pass the other selectors, and how many such descriptions there
+    are. They are None otherwise.
+    """
 
     found: Optional[Node]
     action_result: Optional[CompoundActionResult]
     verify: Optional[AccessibilityTree] = None
     error: Optional[str] = None
+    descriptions_containing: Optional[Tuple[str, ...]] = None
+    descriptions_containing_count: Optional[int] = None
 
 
 class CompoundDoUseCase:
@@ -72,6 +88,7 @@ class CompoundDoUseCase:
         verify: bool = False,
         value: Optional[str] = None,
         timeout: Optional[float] = None,
+        description_pattern: Optional[str] = None,
     ) -> CompoundDoResult:
         """Execute compound find + action + optional verify.
 
@@ -85,10 +102,21 @@ class CompoundDoUseCase:
             verify: If True, re-read the tree after the action.
             value: Optional value to pass to the action.
             timeout: Timeout in seconds for the find phase.
+            description_pattern: Optional whole accessible description the
+                node must have, compared with case and whitespace runs ignored
+                (description_matches); None, "" or whitespace only means no
+                description filter. When it is given and no node is found,
+                the result lists the descriptions that contain it among the
+                last poll's nodes that pass the other selectors. Refused on an
+                Android session before the tree is read.
         """
         session = self._session_repo.load(session_id)
         if session is None:
             raise RuntimeError(f"Session not found: {session_id}")
+        refusal = android_description_refusal(session.backend, description_pattern)
+        if refusal is not None:
+            raise RuntimeError(refusal)
+        described = description_selector_given(description_pattern)
 
         deadline_start = self._clock.now() if timeout is not None else None
 
@@ -106,6 +134,16 @@ class CompoundDoUseCase:
             # Filter by name pattern (whitespace-normalized)
             if name_pattern is not None:
                 matching = [n for n in matching if name_matches(n.name, name_pattern)]
+
+            # The nodes that pass every selector but the description; a given
+            # description selector then keeps those whose whole description
+            # matches.
+            other_selected = matching
+            if described and description_pattern is not None:
+                wanted = description_pattern
+                matching = [
+                    n for n in matching if description_matches(n.description, wanted)
+                ]
 
             if matching:
                 found_node = matching[0]
@@ -152,23 +190,38 @@ class CompoundDoUseCase:
                 )
 
             if timeout is None:
-                return CompoundDoResult(
-                    found=None,
-                    action_result=None,
-                    verify=None,
-                    error="No matching node found",
-                )
+                return _no_match(described, description_pattern, other_selected)
 
             assert (
                 deadline_start is not None
             )  # guarded by timeout is not None check above
             elapsed = self._clock.now() - deadline_start
             if elapsed >= timeout:
-                return CompoundDoResult(
-                    found=None,
-                    action_result=None,
-                    verify=None,
-                    error="No matching node found",
-                )
+                return _no_match(described, description_pattern, other_selected)
 
             self._clock.sleep(self.POLL_INTERVAL)
+
+
+def _no_match(
+    described: bool,
+    description_pattern: Optional[str],
+    other_selected: List[Node],
+) -> CompoundDoResult:
+    """The result when no node is found, listing descriptions for a
+    description query whose text some candidate's description contains."""
+    listed: Optional[Tuple[str, ...]] = None
+    listed_count: Optional[int] = None
+    if described and description_pattern is not None:
+        texts, count = descriptions_containing(
+            (n.description for n in other_selected), description_pattern
+        )
+        if count:
+            listed, listed_count = texts, count
+    return CompoundDoResult(
+        found=None,
+        action_result=None,
+        verify=None,
+        error="No matching node found",
+        descriptions_containing=listed,
+        descriptions_containing_count=listed_count,
+    )
