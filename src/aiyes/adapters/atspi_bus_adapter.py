@@ -2,8 +2,8 @@
 
 Creates an isolated D-Bus session bus via dbus-daemon, then starts
 at-spi-bus-launcher and at-spi2-registryd on that bus. Sets
-ScreenReaderEnabled=true so AccessKit-based apps activate their
-AT-SPI2 adapter. Returns the real session bus address.
+IsEnabled=true and, where advertised, ScreenReaderEnabled=true for
+legacy AccessKit activation. Returns the real session bus address.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import time
 from typing import Dict, List
+from xml.etree import ElementTree
 
 from aiyes.domain.types import BusStartResult
 
@@ -44,6 +45,54 @@ def _resolve_registryd() -> str:
     return _FALLBACK_REGISTRYD_PATH
 
 
+def _has_screen_reader_property(session_bus_address: str) -> bool:
+    """Read status metadata; failed or malformed discovery cannot permit startup."""
+    result = subprocess.run(
+        [
+            "dbus-send",
+            f"--bus={session_bus_address}",
+            "--dest=org.a11y.Bus",
+            "--print-reply",
+            "/org/a11y/bus",
+            "org.freedesktop.DBus.Introspectable.Introspect",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=5,
+    )
+    header, separator, body = result.stdout.partition("\n")
+    body = body.strip()
+    if (
+        not header.startswith("method return ")
+        or not separator
+        or not body.startswith('string "')
+        or not body.endswith('"')
+    ):
+        raise RuntimeError("Invalid AT-SPI status introspection reply")
+    try:
+        node = ElementTree.fromstring(body[len('string "') : -1])
+    except ElementTree.ParseError as error:
+        raise RuntimeError("Invalid AT-SPI status introspection XML") from error
+    interfaces = node.findall("interface[@name='org.a11y.Status']")
+    if node.tag != "node" or len(interfaces) != 1:
+        raise RuntimeError("AT-SPI introspection must expose org.a11y.Status")
+    properties = {}
+    for prop in interfaces[0].findall("property"):
+        name = prop.get("name")
+        if name in properties:
+            raise RuntimeError("Duplicate AT-SPI status property")
+        properties[name] = prop
+    for name in ("IsEnabled", "ScreenReaderEnabled"):
+        prop = properties.get(name)
+        if prop is None:
+            if name == "IsEnabled":
+                raise RuntimeError("AT-SPI status is missing IsEnabled")
+        elif prop.get("type") != "b" or prop.get("access") != "readwrite":
+            raise RuntimeError(f"AT-SPI status property {name} is not a writable boolean")
+    return "ScreenReaderEnabled" in properties
+
+
 def _terminate_and_reap(proc: subprocess.Popen) -> None:
     """Terminate a process and reap it to prevent zombies.
 
@@ -69,7 +118,7 @@ class AtSpiBusAdapter:
 
     Creates an isolated D-Bus session bus, then launches
     at-spi-bus-launcher and at-spi2-registryd on it. Sets
-    ScreenReaderEnabled=true for AccessKit activation.
+    IsEnabled=true and the optional legacy ScreenReaderEnabled property.
     """
 
     def __init__(self) -> None:
@@ -82,8 +131,8 @@ class AtSpiBusAdapter:
           1. dbus-daemon --session (isolated session bus)
           2. at-spi-bus-launcher (registers org.a11y.Bus)
           3. at-spi2-registryd (AT-SPI registry on the AT-SPI bus)
-          4. dbus-send ScreenReaderEnabled=true (AccessKit activation gate)
-          5. dbus-send IsEnabled=true (GTK/ATK apps)
+          4. Introspect org.a11y.Status on the isolated session bus
+          5. Set supported activation properties true before app launch
 
         Returns BusStartResult with the dbus-daemon PID and the real
         session bus address.
@@ -133,7 +182,7 @@ class AtSpiBusAdapter:
             launcher_env["DBUS_SESSION_BUS_ADDRESS"] = session_bus_address
 
             launcher_proc = subprocess.Popen(
-                [launcher, "--launch-immediately", "--screen-reader=1", "--a11y=1"],
+                [launcher, "--launch-immediately"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 env=launcher_env,
@@ -183,43 +232,29 @@ class AtSpiBusAdapter:
 
             time.sleep(0.5)
 
-            # Step 5: Set ScreenReaderEnabled=true
-            subprocess.run(
-                [
-                    "dbus-send",
-                    f"--bus={session_bus_address}",
-                    "--dest=org.a11y.Bus",
-                    "--print-reply",
-                    "/org/a11y/bus",
-                    "org.freedesktop.DBus.Properties.Set",
-                    "string:org.a11y.Status",
-                    "string:ScreenReaderEnabled",
-                    "variant:boolean:true",
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True,
-                timeout=5,
-            )
-
-            # Step 6: Set IsEnabled=true (for GTK/ATK apps)
-            subprocess.run(
-                [
-                    "dbus-send",
-                    f"--bus={session_bus_address}",
-                    "--dest=org.a11y.Bus",
-                    "--print-reply",
-                    "/org/a11y/bus",
-                    "org.freedesktop.DBus.Properties.Set",
-                    "string:org.a11y.Status",
-                    "string:IsEnabled",
-                    "variant:boolean:true",
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True,
-                timeout=5,
-            )
+            # Discover the actual service API before writing activation properties.
+            has_screen_reader = _has_screen_reader_property(session_bus_address)
+            activation_properties = ["IsEnabled"]
+            if has_screen_reader:
+                activation_properties.insert(0, "ScreenReaderEnabled")
+            for name in activation_properties:
+                subprocess.run(
+                    [
+                        "dbus-send",
+                        f"--bus={session_bus_address}",
+                        "--dest=org.a11y.Bus",
+                        "--print-reply",
+                        "/org/a11y/bus",
+                        "org.freedesktop.DBus.Properties.Set",
+                        "string:org.a11y.Status",
+                        f"string:{name}",
+                        "variant:boolean:true",
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=True,
+                    timeout=5,
+                )
         except Exception:
             # Clean up all already-started processes in reverse order
             for proc in reversed(started):

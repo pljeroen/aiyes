@@ -17,6 +17,13 @@ from click.testing import CliRunner
 # Markers
 # ──────────────────────────────────────────────────────────────────────
 
+def pytest_configure(config: Any) -> None:
+    config.addinivalue_line(
+        "markers",
+        "parallel_unsafe: test patches process-global state and must run serially",
+    )
+
+
 _adb_available = shutil.which("adb") is not None
 
 requires_adb = pytest.mark.skipif(

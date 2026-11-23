@@ -44,6 +44,8 @@ from aiyes.domain.types import (
 )
 from aiyes.domain.node_id import NodeIdRegistry
 
+from tests.test_dbus_bridge import _legacy_bus_response
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Helpers
@@ -303,7 +305,10 @@ class TestAtSpiBusAdapterStart:
                 "aiyes.adapters.atspi_bus_adapter.subprocess.Popen",
                 side_effect=[mock_dbus, mock_launcher, mock_registryd],
             ),
-            patch("aiyes.adapters.atspi_bus_adapter.subprocess.run"),
+            patch(
+                "aiyes.adapters.atspi_bus_adapter.subprocess.run",
+                side_effect=_legacy_bus_response,
+            ),
             patch("aiyes.adapters.atspi_bus_adapter.time.sleep"),
             patch(
                 "aiyes.adapters.atspi_bus_adapter.shutil.which",
@@ -326,7 +331,10 @@ class TestAtSpiBusAdapterStart:
                 "aiyes.adapters.atspi_bus_adapter.subprocess.Popen",
                 side_effect=[mock_dbus, mock_launcher, mock_registryd],
             ) as mock_popen,
-            patch("aiyes.adapters.atspi_bus_adapter.subprocess.run"),
+            patch(
+                "aiyes.adapters.atspi_bus_adapter.subprocess.run",
+                side_effect=_legacy_bus_response,
+            ),
             patch("aiyes.adapters.atspi_bus_adapter.time.sleep"),
             patch(
                 "aiyes.adapters.atspi_bus_adapter.shutil.which",

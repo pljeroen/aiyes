@@ -91,6 +91,159 @@ def _make_mock_registryd():
     return mock
 
 
+
+def _status_reply(command, *, legacy=True, fault=None):
+    """Realistic dbus-send replies for either explicit status discovery method."""
+    if "org.a11y.Bus.GetAddress" in command:
+        body = '   string "unix:path=/tmp/at-spi-test"\n'
+    elif "org.freedesktop.DBus.Introspectable.Introspect" in command:
+        properties = [("IsEnabled", "b")]
+        if legacy:
+            properties.append(("ScreenReaderEnabled", "b"))
+        if fault == "missing-mandatory":
+            properties = [("ScreenReaderEnabled", "b")]
+        elif fault == "wrong-type":
+            properties[0] = ("IsEnabled", "s")
+        xml = '<node><interface name="org.a11y.Status">'
+        xml += "".join(
+            f'<property name="{name}" type="{kind}" access="readwrite"/>'
+            for name, kind in properties
+        )
+        xml += "</interface></node>"
+        body = f'   string "{xml}"\n'
+    elif "org.freedesktop.DBus.Properties.GetAll" in command:
+        assert "string:org.a11y.Status" in command, command
+        properties = [("IsEnabled", "boolean false")]
+        if legacy:
+            properties.append(("ScreenReaderEnabled", "boolean false"))
+        if fault == "missing-mandatory":
+            properties = [("ScreenReaderEnabled", "boolean false")]
+        elif fault == "wrong-type":
+            properties[0] = ("IsEnabled", 'string "false"')
+        body = "   array [\n" + "".join(
+            f'      dict entry(\n         string "{name}"\n'
+            f"         variant             {value}\n      )\n"
+            for name, value in properties
+        ) + "   ]\n"
+    else:
+        assert "org.freedesktop.DBus.Properties.Set" in command, command
+        body = ""
+    return subprocess.CompletedProcess(
+        command, 0,
+        stdout="method return time=1.0 sender=:1.0 -> destination=:1.1 serial=1 reply_serial=2\n" + body,
+        stderr="",
+    )
+
+
+def _legacy_bus_response(command, **kwargs):
+    """Supply explicit legacy replies without changing existing expectations."""
+    return _status_reply(command, legacy=True)
+
+
+class _StatusBusHarness:
+    """Owned child and D-Bus call observations without real processes or a bus."""
+
+    def __init__(self, *, legacy=True, failure=None):
+        self.legacy = legacy
+        self.failure = failure
+        self.adapter = AtSpiBusAdapter()
+        self.children = [
+            _make_mock_dbus_daemon(), _make_mock_launcher(), _make_mock_registryd()
+        ]
+        self.acquired = []
+        self.process_calls = []
+        self.calls = []
+        self.queries = []
+        self.writes = []
+        self.cleanup = []
+        for child in self.children:
+            child.terminate.side_effect = lambda child=child: self.cleanup.append(
+                ("terminate", child.pid)
+            )
+            child.wait.side_effect = lambda *, timeout, child=child: self.cleanup.append(
+                ("wait", child.pid, timeout)
+            )
+
+    def spawn(self, command, **kwargs):
+        child = self.children[len(self.acquired)]
+        self.acquired.append(child)
+        self.process_calls.append((command, kwargs))
+        return child
+
+    def run(self, command, **kwargs):
+        self.calls.append((command, kwargs))
+        is_query = any(
+            method in command
+            for method in (
+                "org.freedesktop.DBus.Introspectable.Introspect",
+                "org.freedesktop.DBus.Properties.GetAll",
+            )
+        )
+        reply = _status_reply(command, legacy=self.legacy, fault=self.failure)
+        if is_query:
+            self.queries.append(command)
+            errors = {
+                "query-access-denied": "org.freedesktop.DBus.Error.AccessDenied",
+                "query-service-lost": "org.freedesktop.DBus.Error.ServiceUnknown",
+                "query-invalid-args": "org.freedesktop.DBus.Error.InvalidArgs: ScreenReaderEnabled",
+            }
+            if self.failure in errors:
+                reply = subprocess.CompletedProcess(
+                    command, 1, stdout=reply.stdout, stderr=errors[self.failure]
+                )
+            elif self.failure == "query-timeout":
+                raise subprocess.TimeoutExpired(command, kwargs.get("timeout", 5))
+            elif self.failure == "query-malformed":
+                reply = subprocess.CompletedProcess(
+                    command, 0, stdout="not a valid status reply: ScreenReaderEnabled", stderr=""
+                )
+        elif "org.freedesktop.DBus.Properties.Set" in command:
+            prop = next(
+                value.removeprefix("string:") for value in command
+                if value in ("string:IsEnabled", "string:ScreenReaderEnabled")
+            )
+            assert self.legacy or prop != "ScreenReaderEnabled", (
+                "Current service has no ScreenReaderEnabled property; do not write it"
+            )
+            self.writes.append(prop)
+            if self.failure == {
+                "IsEnabled": "mandatory-write-denied",
+                "ScreenReaderEnabled": "legacy-write-denied",
+            }[prop]:
+                reply = subprocess.CompletedProcess(
+                    command, 1, stdout="", stderr="org.freedesktop.DBus.Error.AccessDenied"
+                )
+        if kwargs.get("check") and reply.returncode:
+            raise subprocess.CalledProcessError(
+                reply.returncode, command, output=reply.stdout, stderr=reply.stderr
+            )
+        return reply
+
+    def assert_cleaned(self):
+        expected = [
+            event for child in reversed(self.acquired)
+            for event in (("terminate", child.pid), ("wait", child.pid, 3))
+        ]
+        assert self.cleanup == expected
+        assert self.adapter._managed_procs == {}
+
+
+@pytest.fixture
+def status_bus(monkeypatch):
+    """Patch only the adapter boundary and give each case its own observations."""
+    def make(**kwargs):
+        harness = _StatusBusHarness(**kwargs)
+        monkeypatch.setattr("aiyes.adapters.atspi_bus_adapter.subprocess.Popen", harness.spawn)
+        monkeypatch.setattr("aiyes.adapters.atspi_bus_adapter.subprocess.run", harness.run)
+        monkeypatch.setattr("aiyes.adapters.atspi_bus_adapter.time.sleep", lambda _: None)
+        monkeypatch.setattr(
+            "aiyes.adapters.atspi_bus_adapter.shutil.which",
+            lambda name: "/usr/bin/" + name,
+        )
+        return harness
+    return make
+
+
 # ──────────────────────────────────────────────────────────────────────
 # R-ATSPI-01: Isolated D-Bus Session Bus
 # ──────────────────────────────────────────────────────────────────────
@@ -111,7 +264,10 @@ class TestAtSpiBusAdapterIsolatedBus:
                 "aiyes.adapters.atspi_bus_adapter.subprocess.Popen",
                 side_effect=[mock_dbus, mock_launcher, mock_registryd],
             ) as mock_popen,
-            patch("aiyes.adapters.atspi_bus_adapter.subprocess.run"),
+            patch(
+                "aiyes.adapters.atspi_bus_adapter.subprocess.run",
+                side_effect=_legacy_bus_response,
+            ),
             patch("aiyes.adapters.atspi_bus_adapter.time.sleep"),
             patch(
                 "aiyes.adapters.atspi_bus_adapter.shutil.which",
@@ -140,7 +296,10 @@ class TestAtSpiBusAdapterIsolatedBus:
                 "aiyes.adapters.atspi_bus_adapter.subprocess.Popen",
                 side_effect=[mock_dbus, mock_launcher, mock_registryd],
             ) as mock_popen,
-            patch("aiyes.adapters.atspi_bus_adapter.subprocess.run"),
+            patch(
+                "aiyes.adapters.atspi_bus_adapter.subprocess.run",
+                side_effect=_legacy_bus_response,
+            ),
             patch("aiyes.adapters.atspi_bus_adapter.time.sleep"),
             patch(
                 "aiyes.adapters.atspi_bus_adapter.shutil.which",
@@ -177,7 +336,10 @@ class TestAtSpiBusAdapterIsolatedBus:
                 "aiyes.adapters.atspi_bus_adapter.subprocess.Popen",
                 side_effect=[mock_dbus, mock_launcher, mock_registryd],
             ) as mock_popen,
-            patch("aiyes.adapters.atspi_bus_adapter.subprocess.run"),
+            patch(
+                "aiyes.adapters.atspi_bus_adapter.subprocess.run",
+                side_effect=_legacy_bus_response,
+            ),
             patch("aiyes.adapters.atspi_bus_adapter.time.sleep"),
             patch(
                 "aiyes.adapters.atspi_bus_adapter.shutil.which",
@@ -211,7 +373,10 @@ class TestAtSpiBusAdapterIsolatedBus:
                 "aiyes.adapters.atspi_bus_adapter.subprocess.Popen",
                 side_effect=[mock_dbus, mock_launcher, mock_registryd],
             ),
-            patch("aiyes.adapters.atspi_bus_adapter.subprocess.run"),
+            patch(
+                "aiyes.adapters.atspi_bus_adapter.subprocess.run",
+                side_effect=_legacy_bus_response,
+            ),
             patch("aiyes.adapters.atspi_bus_adapter.time.sleep"),
             patch(
                 "aiyes.adapters.atspi_bus_adapter.shutil.which",
@@ -236,7 +401,10 @@ class TestAtSpiBusAdapterIsolatedBus:
                 "aiyes.adapters.atspi_bus_adapter.subprocess.Popen",
                 side_effect=[mock_dbus, mock_launcher, mock_registryd],
             ),
-            patch("aiyes.adapters.atspi_bus_adapter.subprocess.run"),
+            patch(
+                "aiyes.adapters.atspi_bus_adapter.subprocess.run",
+                side_effect=_legacy_bus_response,
+            ),
             patch("aiyes.adapters.atspi_bus_adapter.time.sleep"),
             patch(
                 "aiyes.adapters.atspi_bus_adapter.shutil.which",
@@ -268,7 +436,10 @@ class TestAtSpiBusScreenReaderEnabled:
                 "aiyes.adapters.atspi_bus_adapter.subprocess.Popen",
                 side_effect=[mock_dbus, mock_launcher, mock_registryd],
             ),
-            patch("aiyes.adapters.atspi_bus_adapter.subprocess.run") as mock_run,
+            patch(
+                "aiyes.adapters.atspi_bus_adapter.subprocess.run",
+                side_effect=_legacy_bus_response,
+            ) as mock_run,
             patch("aiyes.adapters.atspi_bus_adapter.time.sleep"),
             patch(
                 "aiyes.adapters.atspi_bus_adapter.shutil.which",
@@ -303,7 +474,10 @@ class TestAtSpiBusScreenReaderEnabled:
                 "aiyes.adapters.atspi_bus_adapter.subprocess.Popen",
                 side_effect=[mock_dbus, mock_launcher, mock_registryd],
             ),
-            patch("aiyes.adapters.atspi_bus_adapter.subprocess.run") as mock_run,
+            patch(
+                "aiyes.adapters.atspi_bus_adapter.subprocess.run",
+                side_effect=_legacy_bus_response,
+            ) as mock_run,
             patch("aiyes.adapters.atspi_bus_adapter.time.sleep"),
             patch(
                 "aiyes.adapters.atspi_bus_adapter.shutil.which",
@@ -331,7 +505,10 @@ class TestAtSpiBusScreenReaderEnabled:
                 "aiyes.adapters.atspi_bus_adapter.subprocess.Popen",
                 side_effect=[mock_dbus, mock_launcher, mock_registryd],
             ),
-            patch("aiyes.adapters.atspi_bus_adapter.subprocess.run") as mock_run,
+            patch(
+                "aiyes.adapters.atspi_bus_adapter.subprocess.run",
+                side_effect=_legacy_bus_response,
+            ) as mock_run,
             patch("aiyes.adapters.atspi_bus_adapter.time.sleep"),
             patch(
                 "aiyes.adapters.atspi_bus_adapter.shutil.which",
@@ -368,7 +545,10 @@ class TestAtSpiBusAdapterStopBus:
                 "aiyes.adapters.atspi_bus_adapter.subprocess.Popen",
                 side_effect=[mock_dbus, mock_launcher, mock_registryd],
             ),
-            patch("aiyes.adapters.atspi_bus_adapter.subprocess.run"),
+            patch(
+                "aiyes.adapters.atspi_bus_adapter.subprocess.run",
+                side_effect=_legacy_bus_response,
+            ),
             patch("aiyes.adapters.atspi_bus_adapter.time.sleep"),
             patch(
                 "aiyes.adapters.atspi_bus_adapter.shutil.which",
@@ -404,7 +584,10 @@ class TestAtSpiBusAdapterStopBus:
                 "aiyes.adapters.atspi_bus_adapter.subprocess.Popen",
                 side_effect=[mock_dbus, mock_launcher, mock_registryd],
             ),
-            patch("aiyes.adapters.atspi_bus_adapter.subprocess.run"),
+            patch(
+                "aiyes.adapters.atspi_bus_adapter.subprocess.run",
+                side_effect=_legacy_bus_response,
+            ),
             patch("aiyes.adapters.atspi_bus_adapter.time.sleep"),
             patch(
                 "aiyes.adapters.atspi_bus_adapter.shutil.which",
@@ -482,7 +665,10 @@ class TestBusAddressNotSentinel:
                 "aiyes.adapters.atspi_bus_adapter.subprocess.Popen",
                 side_effect=[mock_dbus, mock_launcher, mock_registryd],
             ),
-            patch("aiyes.adapters.atspi_bus_adapter.subprocess.run"),
+            patch(
+                "aiyes.adapters.atspi_bus_adapter.subprocess.run",
+                side_effect=_legacy_bus_response,
+            ),
             patch("aiyes.adapters.atspi_bus_adapter.time.sleep"),
             patch(
                 "aiyes.adapters.atspi_bus_adapter.shutil.which",
@@ -597,7 +783,10 @@ class TestAtSpiBusAdapterErrorHandling:
                 "aiyes.adapters.atspi_bus_adapter.subprocess.Popen",
                 side_effect=[mock_dbus, OSError("cannot spawn launcher")],
             ),
-            patch("aiyes.adapters.atspi_bus_adapter.subprocess.run"),
+            patch(
+                "aiyes.adapters.atspi_bus_adapter.subprocess.run",
+                side_effect=_legacy_bus_response,
+            ),
             patch("aiyes.adapters.atspi_bus_adapter.time.sleep"),
             patch(
                 "aiyes.adapters.atspi_bus_adapter.shutil.which",
@@ -626,7 +815,10 @@ class TestAtSpiBusAdapterErrorHandling:
                     OSError("cannot spawn registryd"),
                 ],
             ),
-            patch("aiyes.adapters.atspi_bus_adapter.subprocess.run"),
+            patch(
+                "aiyes.adapters.atspi_bus_adapter.subprocess.run",
+                side_effect=_legacy_bus_response,
+            ),
             patch("aiyes.adapters.atspi_bus_adapter.time.sleep"),
             patch(
                 "aiyes.adapters.atspi_bus_adapter.shutil.which",
@@ -649,16 +841,14 @@ class TestAtSpiBusAdapterErrorHandling:
         mock_launcher = _make_mock_launcher()
         mock_registryd = _make_mock_registryd()
 
-        # First subprocess.run is GetAddress (succeeds),
-        # then dbus-send ScreenReaderEnabled (fails)
-        get_addr_result = MagicMock()
-        get_addr_result.stdout = '   string "unix:path=/tmp/at-spi-test"\n'
-
-        def run_side_effect(*args, **kwargs):
-            cmd = args[0] if args else kwargs.get("args", [])
-            if "GetAddress" in str(cmd):
-                return get_addr_result
-            raise subprocess.CalledProcessError(1, "dbus-send")
+        # Discovery succeeds; the advertised legacy property write itself fails.
+        def run_side_effect(cmd, **kwargs):
+            if (
+                "org.freedesktop.DBus.Properties.Set" in cmd
+                and "string:ScreenReaderEnabled" in cmd
+            ):
+                raise subprocess.CalledProcessError(1, cmd)
+            return _legacy_bus_response(cmd, **kwargs)
 
         with (
             patch(
@@ -685,3 +875,116 @@ class TestAtSpiBusAdapterErrorHandling:
             mock_launcher.wait.assert_called_once()
             mock_registryd.terminate.assert_called_once()
             mock_registryd.wait.assert_called_once()
+
+
+@pytest.mark.parallel_unsafe
+class TestAtSpiStatusCompatibility:
+    """Current and legacy service activation must retain isolation and ownership."""
+
+    @pytest.mark.parametrize("legacy", [False, True], ids=["current", "legacy"])
+    def test_supported_status_service_activates_before_success(self, status_bus, legacy):
+        harness = status_bus(legacy=legacy)
+
+        result = harness.adapter.start_bus(":99")
+
+        assert harness.process_calls[1][0] == [
+            "/usr/bin/at-spi-bus-launcher", "--launch-immediately"
+        ]
+        assert harness.queries, "Startup must consume an explicit successful status reply"
+        assert sorted(harness.writes) == (
+            ["IsEnabled", "ScreenReaderEnabled"] if legacy else ["IsEnabled"]
+        )
+        assert result == BusStartResult(
+            pid=7001,
+            bus_address="unix:abstract=/tmp/dbus-aBcDeF",
+            atspi_bus_address="unix:path=/tmp/at-spi-test",
+        )
+        assert harness.adapter._managed_procs == {7001: harness.acquired}
+        assert harness.process_calls[1][1]["env"]["DISPLAY"] == ":99"
+        for _, options in harness.process_calls[1:]:
+            assert options["env"]["DBUS_SESSION_BUS_ADDRESS"] == result.bus_address
+        for command, options in harness.calls:
+            assert "--bus=" + result.bus_address in command
+            assert "--dest=org.a11y.Bus" in command
+            assert "/org/a11y/bus" in command
+            assert options["timeout"] == 5
+            if "org.freedesktop.DBus.Properties.Set" in command:
+                assert "string:org.a11y.Status" in command
+                assert "variant:boolean:true" in command
+        assert harness.cleanup == []
+
+        harness.adapter.stop_bus(result.pid)
+
+        harness.assert_cleaned()
+
+    def test_application_launch_receives_only_an_activated_isolated_bus(self, status_bus):
+        harness = status_bus(legacy=False)
+        process = FakeProcess()
+        repository = FakeSessionRepository()
+        process_start = process.start
+        observed_activation = []
+
+        def start_after_activation(command, args, env=None):
+            observed_activation.append(tuple(harness.writes))
+            assert harness.queries
+            assert harness.writes == ["IsEnabled"]
+            assert 7001 in harness.adapter._managed_procs
+            return process_start(command, args, env=env)
+
+        process.start = start_after_activation
+        use_case = SessionStartUseCase(
+            display_server=FakeDisplayServer(),
+            allocator=FakeDisplayAllocator(),
+            atspi_bus=harness.adapter,
+            process=process,
+            session_repo=repository,
+            clock=FakeClock(),
+        )
+
+        session = use_case.execute(app_command="test-app", app_args=[], wait=0.0)
+
+        assert observed_activation == [("IsEnabled",)]
+        app_calls = [args for name, args in process.calls if name == "start"]
+        assert len(app_calls) == 1
+        command, arguments, environment = app_calls[0]
+        assert (command, arguments) == ("test-app", [])
+        assert environment["DBUS_SESSION_BUS_ADDRESS"] == "unix:abstract=/tmp/dbus-aBcDeF"
+        assert "AT_SPI_BUS_ADDRESS" not in environment
+        assert session.atspi_bus_pid == 7001
+        assert session.atspi_bus_address == environment["DBUS_SESSION_BUS_ADDRESS"]
+        assert repository.load_all() == [session]
+
+        harness.adapter.stop_bus(session.atspi_bus_pid)
+        harness.assert_cleaned()
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            "query-access-denied",
+            "query-service-lost",
+            "query-invalid-args",
+            "query-timeout",
+            "query-malformed",
+            "missing-mandatory",
+            "wrong-type",
+            "mandatory-write-denied",
+            "legacy-write-denied",
+        ],
+    )
+    def test_activation_failure_releases_acquired_children(self, status_bus, failure):
+        harness = status_bus(legacy=True, failure=failure)
+
+        with pytest.raises((
+            subprocess.CalledProcessError, subprocess.TimeoutExpired, RuntimeError, ValueError
+        )):
+            harness.adapter.start_bus(":99")
+
+        if failure in ("mandatory-write-denied", "legacy-write-denied"):
+            expected_property = (
+                "IsEnabled" if failure == "mandatory-write-denied" else "ScreenReaderEnabled"
+            )
+            assert expected_property in harness.writes
+        else:
+            assert harness.queries, "The failed capability operation must actually be reached"
+            assert harness.writes == [], "Failed discovery cannot authorize activation"
+        harness.assert_cleaned()
