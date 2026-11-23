@@ -352,14 +352,16 @@ class TestAtSpiBusAdapterStart:
 class TestAtSpiBusAdapterStop:
     """AtSpiBusAdapter.stop_bus() terminates bus by PID."""
 
-    def test_stop_bus_terminates_pid(self) -> None:
+    @pytest.mark.parallel_unsafe
+    def test_stop_bus_unowned_pid_refuses_without_signal(self, unowned_bus_stop) -> None:
         from aiyes.adapters.atspi_bus_adapter import AtSpiBusAdapter
 
         adapter = AtSpiBusAdapter()
-        with patch("os.kill") as mock_kill:
+        with pytest.raises(RuntimeError):
             adapter.stop_bus(88)
-            mock_kill.assert_called()
-            assert mock_kill.call_args[0][0] == 88
+
+        for signal_route in unowned_bus_stop:
+            signal_route.assert_not_called()
 
 
 class TestAtSpiBusAdapterConformance:

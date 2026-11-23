@@ -8,6 +8,7 @@ from __future__ import annotations
 import inspect
 import shutil
 from typing import Any, Dict, List, Optional, Tuple
+from unittest.mock import MagicMock
 
 import pytest
 from click.testing import CliRunner
@@ -539,3 +540,121 @@ def fake_clock() -> FakeClock:
 @pytest.fixture
 def fake_dependency_check() -> FakeDependencyCheck:
     return FakeDependencyCheck()
+
+
+@pytest.fixture
+def unowned_bus_stop(monkeypatch, tmp_path):
+    """No ownership metadata or real signal delivery for arbitrary test PIDs."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    routes = [MagicMock(), MagicMock(), MagicMock()]
+    monkeypatch.setattr("os.kill", routes[0])
+    monkeypatch.setattr("os.killpg", routes[1])
+    monkeypatch.setattr("signal.pidfd_send_signal", routes[2], raising=False)
+    monkeypatch.setattr("os.pidfd_open", MagicMock(side_effect=ProcessLookupError), raising=False)
+    return routes
+
+
+@pytest.fixture(autouse=True)
+def isolated_mock_bus_identities(request, monkeypatch, tmp_path):
+    """Keep standing fake bus PIDs off real /proc and private ownership storage."""
+    supported = {
+        "TestAtSpiBusAdapterIsolatedBus", "TestAtSpiBusScreenReaderEnabled",
+        "TestAtSpiBusAdapterStopBus", "TestBusAddressNotSentinel",
+        "TestAtSpiBusAdapterErrorHandling", "TestAtSpiStatusCompatibility",
+        "TestAtSpiBusAdapterStart",
+    }
+    if request.cls is None or request.cls.__name__ not in supported:
+        return
+    import builtins
+    import io
+    import os
+    import signal
+    import stat
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    identities = {
+        7001: "dbus-daemon", 7002: "at-spi-bus-launcher", 7003: "at-spi2-registryd",
+        88: "dbus-daemon", 89: "at-spi-bus-launcher", 90: "at-spi2-registryd",
+    }
+    state = {pid: "S" for pid in identities}
+    descriptors = {}
+    real_open, real_io_open = builtins.open, io.open
+    real_readlink, real_stat = os.readlink, os.stat
+    real_pin, real_send, real_close = os.pidfd_open, signal.pidfd_send_signal, os.close
+
+    def proc_parts(path):
+        if isinstance(path, int):
+            return None
+        parts = os.fspath(path).split("/")
+        if len(parts) >= 3 and parts[1] == "proc" and parts[2].isdigit():
+            pid = int(parts[2])
+            if pid in identities:
+                return pid, "/".join(parts[3:])
+        return None
+
+    def contents(pid, leaf):
+        if leaf == "stat":
+            fields = [state[pid], str(os.getpid())] + ["0"] * 50
+            fields[19] = str(100000 + pid)
+            return f"{pid} ({identities[pid]}) " + " ".join(fields)
+        if leaf == "status":
+            return f"Name:\t{identities[pid]}\nState:\t{state[pid]}\nPPid:\t{os.getpid()}\nUid:\t{os.getuid()} {os.getuid()} {os.getuid()} {os.getuid()}\n"
+        if leaf == "environ":
+            import subprocess
+            position = {7001: 0, 7002: 1, 7003: 2, 88: 0, 89: 1, 90: 2}[pid]
+            calls = getattr(subprocess.Popen, "call_args_list", [])
+            if len(calls) > position:
+                environment = calls[position].kwargs.get("env", {})
+                return "\0".join(key + "=" + value for key, value in environment.items()) + "\0"
+            address = "unix:abstract=/tmp/dbus-test" if pid < 100 else "unix:abstract=/tmp/dbus-aBcDeF"
+            return "DBUS_SESSION_BUS_ADDRESS=" + address + "\0DISPLAY=:99\0HOME=" + str(tmp_path) + "\0"
+        if leaf == "cmdline":
+            return identities[pid] + "\0"
+        return None
+
+    def open_proc(original, path, mode="r", *args, **kwargs):
+        found = proc_parts(path)
+        text = contents(*found) if found else None
+        if text is not None and "r" in mode:
+            return io.BytesIO(text.encode()) if "b" in mode else io.StringIO(text)
+        return original(path, mode, *args, **kwargs)
+
+    def readlink(path, *args, **kwargs):
+        found = proc_parts(path)
+        if found and found[1] == "exe":
+            return "/usr/bin/" + identities[found[0]]
+        return real_readlink(path, *args, **kwargs)
+
+    def proc_stat(path, *args, **kwargs):
+        found = proc_parts(path)
+        if found:
+            mode = stat.S_IFDIR | 0o555 if not found[1] else stat.S_IFREG | 0o444
+            return os.stat_result((mode, found[0], 0, 1, os.getuid(), os.getgid(), 0, 0, 0, 0))
+        return real_stat(path, *args, **kwargs)
+
+    def pin(pid, flags=0):
+        if pid in identities:
+            descriptor = 1000000 + len(descriptors)
+            descriptors[descriptor] = pid
+            return descriptor
+        return real_pin(pid, flags)
+
+    def send(descriptor, signum, siginfo=None, flags=0):
+        if descriptor in descriptors:
+            state[descriptors[descriptor]] = "Z"
+            return None
+        return real_send(descriptor, signum, siginfo, flags)
+
+    def close(descriptor):
+        if descriptor in descriptors:
+            del descriptors[descriptor]
+            return None
+        return real_close(descriptor)
+
+    monkeypatch.setattr(builtins, "open", lambda path, mode="r", *a, **k: open_proc(real_open, path, mode, *a, **k))
+    monkeypatch.setattr(io, "open", lambda path, mode="r", *a, **k: open_proc(real_io_open, path, mode, *a, **k))
+    monkeypatch.setattr(os, "readlink", readlink)
+    monkeypatch.setattr(os, "stat", proc_stat)
+    monkeypatch.setattr(os, "pidfd_open", pin)
+    monkeypatch.setattr(signal, "pidfd_send_signal", send)
+    monkeypatch.setattr(os, "close", close)
