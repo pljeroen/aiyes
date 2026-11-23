@@ -1025,7 +1025,7 @@ class _PrivateBusProbe:
         self.root.mkdir()
         self.home = root / "home"
         self.home.mkdir()
-        self.receipts = self.home / ".aieyes" / ".atspi-ownership"
+        self.receipts = self.home / ".aieyes" / "_global" / "atspi-ownership"
         self.address = "unix:path=" + str(root / "session-bus")
         self.legacy = legacy
         self.stubborn = stubborn
@@ -1511,3 +1511,79 @@ class TestAtSpiOwnershipRecovery:
             for handle in handles:
                 fcntl.flock(handle, fcntl.LOCK_UN)
                 handle.close()
+
+
+@pytest.mark.parallel_unsafe
+class TestAtSpiOwnershipPruneCompatibility:
+    @pytest.mark.parametrize("dry_run", [True, False], ids=["dry-run", "real"])
+    @pytest.mark.parametrize("established_global", [False, True], ids=["fresh-home", "existing-global"])
+    def test_public_prune_preserves_ownership_and_active_session(
+        self, monkeypatch, tmp_path, dry_run, established_global
+    ):
+        from aiyes.adapters.atspi_bus_adapter import _private_directory
+        from aiyes.adapters.file_session_cleanup import FileSessionCleanup
+        from aiyes.adapters.file_session_repository import FileSessionRepository
+        from aiyes.domain.session import Session
+        from aiyes.domain.use_cases.prune import PruneUseCase
+
+        home = tmp_path / "private-home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        session_root = home / ".aieyes"
+        global_root = session_root / "_global"
+        global_bytes = b'{"action":"existing-global-record"}\n'
+        if established_global:
+            global_root.mkdir(mode=0o755, parents=True)
+            global_root.chmod(0o755)
+            (global_root / "operations.jsonl").write_bytes(global_bytes)
+            (global_root / "existing-metadata").write_bytes(b"preserve global metadata")
+
+        # Exercise production store creation. The public prune call below, before
+        # path postconditions, must expose a misplaced ownership namespace.
+        ownership_directory = _private_directory(create=True)
+        sentinel = ownership_directory / "namespace-preservation.sentinel"
+        sentinel.write_bytes(b"preserve private ownership metadata")
+        sentinel.chmod(0o600)
+        ownership_before = {
+            path: path.read_bytes() for path in ownership_directory.rglob("*") if path.is_file()
+        }
+        repository = FileSessionRepository()
+        active = Session(
+            session_id="active-session", app_pid=101, app_command="private-test-app",
+            app_args=(), name=None, display=":99", xvfb_pid=102,
+            atspi_bus_pid=103, started_at=1.0,
+        )
+        stale = Session(
+            session_id="deadbeef", app_pid=201, app_command="private-stale-app",
+            app_args=(), name=None, display=":98", xvfb_pid=202,
+            atspi_bus_pid=203, started_at=1.0,
+        )
+        repository.save(active)
+        repository.save(stale)
+        active_file = session_root / active.session_id / "session.json"
+        active_before = active_file.read_bytes()
+        process = FakeProcess()
+        process._running.update({101: True, 102: True, 201: False, 202: False})
+        prune = PruneUseCase(
+            session_repo=repository, cleanup=FileSessionCleanup(),
+            process=process, clock=FakeClock(now_value=500000.0),
+        )
+
+        result = prune.execute(max_age_hours=72.0, dry_run=dry_run)
+
+        assert result.dry_run is dry_run
+        assert result.pruned_count == 1
+        assert result.sessions_pruned == (stale.session_id,)
+        assert result.skipped_active == 1
+        assert (session_root / stale.session_id).exists() is dry_run
+        assert active_file.read_bytes() == active_before
+        assert repository.load(active.session_id) == active
+        assert all(path.read_bytes() == data for path, data in ownership_before.items())
+        assert ownership_directory.parent == global_root / "atspi-ownership"
+        assert global_root.is_dir()
+        assert ownership_directory.stat().st_mode & 0o777 == 0o700
+        assert ownership_directory.parent.stat().st_mode & 0o777 == 0o700
+        if established_global:
+            assert global_root.stat().st_mode & 0o777 == 0o755
+            assert (global_root / "operations.jsonl").read_bytes() == global_bytes
+            assert (global_root / "existing-metadata").read_bytes() == b"preserve global metadata"

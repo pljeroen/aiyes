@@ -167,15 +167,16 @@ def _acquire_child(proc: subprocess.Popen, environment: dict) -> tuple[int, dict
 
 def _private_directory(create: bool) -> Path:
     parent = Path.home() / ".aieyes"
-    root = parent / ".atspi-ownership"
+    global_root = parent / "_global"
+    root = global_root / "atspi-ownership"
     boot = root / _boot_id()
-    for directory in (parent, root, boot):
+    for directory in (parent, global_root, root, boot):
         if create:
             directory.mkdir(mode=0o700, exist_ok=True)
         info = directory.stat(follow_symlinks=False)
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
             raise RuntimeError("Unsafe AT-SPI ownership directory")
-        if directory != parent and stat.S_IMODE(info.st_mode) != 0o700:
+        if directory in (root, boot) and stat.S_IMODE(info.st_mode) != 0o700:
             raise RuntimeError("AT-SPI ownership directory must be private")
     return boot
 
